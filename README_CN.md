@@ -4,6 +4,8 @@
 
 [English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md) | [简体中文](README_CN.md)
 
+> **项目渊源与致谢**：本项目为 [@zexadev](https://github.com/zexadev) 所开创之 [gemini-web2api-go](https://github.com/zexadev/gemini-web2api-go) 的独立硬分叉（Hard Fork）与重大架构演进版本。向原作者 zexadev 及所有上游贡献者的开创性基础工作致以诚挚敬意。
+
 ---
 
 ## 这是什么项目？
@@ -393,7 +395,29 @@ curl -X POST http://localhost:8083/v1/chat/completions \
 
 ---
 
-## 11. 开源协议
+## 11. 项目渊源与重大架构演进
 
-本项目基于 MIT 许可证开源。
+本项目源自于由 [@zexadev](https://github.com/zexadev) 主导的开源项目 [gemini-web2api-go](https://github.com/zexadev/gemini-web2api-go)。我们对原作者与社区贡献者在探索 Google Gemini Web 逆向代理工程上奠定的坚实基础表示由衷感谢。
+
+### 为什么 Gemini Free API 选择独立硬分叉（Hard Fork）？
+
+在继承上游基础的同时，为了解决生产高并发环境下频繁出现的账号被踢出登录、多轮对话状态漂移与超长文本崩溃等关键痛点，本项目进行了全面的底层架构重构：
+
+| 技术维度 | 上游原版（`gemini-web2api-go`） | Gemini Free API（本架构重构） | 重构目标与技术原理 |
+| :--- | :--- | :--- | :--- |
+| **账号并发锁定** | 槽位间共享账号连接，无并发约束 | **严格单账号在途互斥锁**（`accountInflightMu`） | 彻底避免同一个 Google 账号会话同时处理多个请求引发的 Google 风控强制登出。 |
+| **会话持久性** | 定期发送 `RotateCookies` 刷新 Token | **原生浏览器会话保护** | 停止伪造会话轮换请求，避免导致原生浏览器（如 Firefox）已登录会话失效。 |
+| **对话上下文策略** | 服务端多轮状态延续模式 | **严格无状态 Context Replay 回放** | 消除多轮对话在服务端的缓存漂移与不一致性，完全符合标准 OpenAI API 无状态规范。 |
+| **超长文本保护** | 实验性分块机器人发送（`reply ONLY with OK`） | **三阶文档管道 + 155 KB 硬边界防护** | 30KB - 155KB 自动上传为原生文档附件（支持达 50,000 Token），防止账号被 Google 风控标记。 |
+| **用户界面** | 传统管理界面 | **零外链现代化遥测控制台** | 100% 离线无 CDN 依赖，内置 SSE 实时流式调试抽屉与深度思考链可视化。 |
+
+---
+
+## 12. 开源协议
+
+本项目基于 MIT 许可证开源。完整条款请参阅 [LICENSE](LICENSE)。
+
+* 原始作品版权：Copyright (c) 2026 gemini-web2api-go contributors
+* 修改与架构重构版权：Copyright (c) 2026 Gemini Free API contributors
+
 仅供学术研究、本地知识库集成与个人开发测试使用。请严格遵守 Google 服务条款。

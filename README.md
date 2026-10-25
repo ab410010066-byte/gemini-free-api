@@ -4,6 +4,8 @@
 
 [English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md) | [简体中文](README_CN.md)
 
+> **Lineage & Acknowledgements**: This project is an independent hard fork and architectural evolution of [gemini-web2api-go](https://github.com/zexadev/gemini-web2api-go) by [@zexadev](https://github.com/zexadev). Sincere gratitude to zexadev and upstream contributors for their pioneering foundation.
+
 ---
 
 ## What is Gemini Free API?
@@ -393,7 +395,29 @@ All parameters are stored in SQLite and can be modified live through the adminis
 
 ---
 
-## 11. License
+## 11. Upstream Lineage & Architectural Evolution
 
-Distributed under the MIT License.
+This project originated as a hard fork of [gemini-web2api-go](https://github.com/zexadev/gemini-web2api-go), created by [@zexadev](https://github.com/zexadev). We express sincere appreciation to zexadev and all upstream contributors for their foundational work in exploring Google Gemini Web reverse engineering.
+
+### Why Gemini Free API Evolved as a Hard Fork
+
+While honoring the upstream codebase, Gemini Free API diverged into a standalone architecture to solve core production bottlenecks and enterprise-grade reliability concerns:
+
+| Technical Dimension | Upstream (`gemini-web2api-go`) | Gemini Free API (This Architecture) | Technical Rationale |
+| :--- | :--- | :--- | :--- |
+| **Account Concurrency** | Shared account access across slots | **Strict In-Flight Mutex Isolation** (`accountInflightMu`) | Eliminates concurrent request collisions that trigger Google account logouts. |
+| **Session Persistence** | Automatic `RotateCookies` token refresh | **Native Browser Session Preservation** | Bypasses synthetic token rotation requests that invalidate browser sessions. |
+| **Context Strategy** | Server-side multi-turn state continuation | **Pure Stateless Context Replay** | Eliminates state desynchronization and conforms strictly to OpenAI API specifications. |
+| **Oversize Protection** | Experimental bot chunking ("reply ONLY with OK") | **3-Tier Document Pipeline + 155 KB Hard Guard** | Safely ingests up to 50,000 tokens as native document attachments without bot bans. |
+| **User Interface** | Classic management interface | **High-Performance Telemetry Dashboard** | Embedded zero-CDN interface with real-time SSE streaming debugger and reasoning drawer. |
+
+---
+
+## 12. License
+
+Distributed under the MIT License. See [LICENSE](LICENSE) for details.
+
+* Original work Copyright (c) 2026 gemini-web2api-go contributors
+* Modifications and enhancements Copyright (c) 2026 Gemini Free API contributors
+
 For research, local application development, and personal knowledge systems. Ensure compliance with Google Terms of Service.
