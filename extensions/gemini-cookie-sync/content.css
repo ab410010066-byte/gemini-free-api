@@ -1,0 +1,66 @@
+/* Gemini Cookie Sync Floating Button */
+#gemini-cookie-sync-host {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999999;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  user-select: none;
+}
+
+.gcs-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(26, 115, 232, 0.95);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(26, 115, 232, 0.4);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gcs-pill:hover {
+  background: rgba(21, 95, 195, 0.98);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3), 0 4px 10px rgba(26, 115, 232, 0.5);
+}
+
+.gcs-pill:active {
+  transform: translateY(0);
+}
+
+.gcs-pill.syncing {
+  background: rgba(85, 85, 85, 0.9);
+  cursor: wait;
+}
+
+.gcs-pill.success {
+  background: rgba(46, 125, 50, 0.95);
+  box-shadow: 0 4px 16px rgba(46, 125, 50, 0.4);
+}
+
+.gcs-pill.error {
+  background: rgba(198, 40, 40, 0.95);
+  box-shadow: 0 4px 16px rgba(198, 40, 40, 0.4);
+}
+
+.gcs-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.gcs-spin {
+  animation: gcs-spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes gcs-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

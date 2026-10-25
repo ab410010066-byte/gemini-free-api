@@ -104,6 +104,50 @@ func accountAdd(label, cookie, note string) (int64, error) {
 	return accountInsert(label, c, note)
 }
 
+// accountUpsert 智能新增或更新账号：根据 SAPISID 识别账号，若已存在则更新 cookie 并重置状态，不存在则新建。
+func accountUpsert(label, cookie, note string) (int64, bool, error) {
+	c, ok := normalizeCookie(cookie, "自动同步的 cookie")
+	if !ok {
+		return 0, false, fmt.Errorf("cookie 解析失败：无法识别的格式")
+	}
+	sapisid := extractSAPISID(c)
+	if sapisid == "" {
+		return 0, false, fmt.Errorf("cookie 里没有 SAPISID，请确保在 gemini.google.com 登录完整")
+	}
+
+	trimmedLabel := strings.TrimSpace(label)
+	trimmedNote := strings.TrimSpace(note)
+
+	// 查找是否已存在相同 SAPISID 的账号
+	for _, a := range accountList() {
+		if extractSAPISID(a.Cookie) == sapisid {
+			now := time.Now().Unix()
+			newLabel := a.Label
+			if trimmedLabel != "" && (a.Label == "" || strings.HasPrefix(a.Label, "account-") || a.Label == "auto") {
+				newLabel = trimmedLabel
+			}
+			newNote := a.Note
+			if trimmedNote != "" {
+				newNote = trimmedNote
+			}
+			_, err := getDB().Exec(
+				`UPDATE accounts SET cookie=?, label=?, note=?, status='enabled', fail_count=0, last_error='', last_used_at=? WHERE id=?`,
+				c, newLabel, newNote, now, a.ID,
+			)
+			if err != nil {
+				return a.ID, false, fmt.Errorf("更新账号失败: %w", err)
+			}
+			return a.ID, true, nil
+		}
+	}
+
+	if trimmedLabel == "" {
+		trimmedLabel = fmt.Sprintf("account-%s", randHex(4))
+	}
+	id, err := accountInsert(trimmedLabel, c, trimmedNote)
+	return id, false, err
+}
+
 // accountAdopt 是启动时导入既有配置专用的：**不做 SAPISID 检查**。
 //
 // 判据是「升级不能改变用户已有配置的可用性」。缺 SAPISID 的 cookie 在旧版是被
@@ -546,6 +590,7 @@ func checkAccountCookie(a CookieAccount) CookieCheck {
 		return CookieCheck{Detail: explainCookieFailure(err), ProxyName: name, TookMs: took}
 	}
 	markAccountResult(a.ID, true, "")
+	go refreshAccountQuota(a)
 	detail := "登录态有效"
 	if extractSAPISID(a.Cookie) == "" {
 		detail += "，但缺 SAPISID（算不出授权头，部分接口会被当匿名）"

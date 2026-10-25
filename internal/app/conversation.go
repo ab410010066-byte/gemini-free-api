@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,8 +25,10 @@ type convState struct {
 	turn                  int    // 会话内轮次索引，填 inner[17]，逐轮 +1
 	cookie                string // 会话绑定 cookie：登录号的 cookie，或匿名 /app 拿的 session
 	sapisid               string // 登录态算 SAPISIDHASH 用；匿名为空
+	xsrf                  string // 登录态 XSRF (at) 校验值
 	isLogin               bool
 	accountID             int64
+	accountLabel          string
 	proxyID               int64
 	proxyURL              string
 	updated               time.Time
@@ -242,9 +245,12 @@ const webUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 	"(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 
 // streamGenerateConv 发一路会话的一轮。turn==0 是首轮（建会话），>0 是续接（只发新消息）。
-// 整条会话绑定 conv.cookie / conv.proxyID，中途不换号不换出口。成功后回填 conv 的
-// cid/rid/rcid/tok26 和 turn+1，供下一轮续接。
 func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
+	onDelta, onReasoning func(string)) (*StreamResult, error) {
+	return streamGenerateConvWithLatest(prompt, "", mc, conv, onDelta, onReasoning)
+}
+
+func streamGenerateConvWithLatest(prompt, latest string, mc ModelConfig, conv *convState,
 	onDelta, onReasoning func(string)) (*StreamResult, error) {
 	p, slotOK, slotErr := acquireSlot(conv.proxyID)
 	if !slotOK {
@@ -252,7 +258,6 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 	}
 	defer releaseSlot(p.ID)
 	proxyURL := p.URL
-	pickedOK := p.ID > 0
 
 	// 首轮定出口；续接沿用会话原出口（acquireSlot 已优先，但拿不到原出口时只能换，
 	// 换了续接大概率失败，靠调用方回退到全量重发兜底）。
@@ -275,13 +280,195 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 		if tok, err := getXSRF(conv.cookie, proxyURL); err == nil {
 			xsrf = tok
 		} else {
-			return &StreamResult{ProxyID: p.ID, ProxyName: p.Name, AccountID: conv.accountID},
-				fmt.Errorf("取 XSRF 失败: %w", err)
+			// 换号之前先给它一次机会：强制轮转一次再重取
+			if freshAcct := accountByID(conv.accountID); freshAcct != nil {
+				if _, _, rerr := rotateAccount(*freshAcct); rerr == nil {
+					if refreshed := accountByID(conv.accountID); refreshed != nil {
+						if tok2, err2 := getXSRF(refreshed.Cookie, proxyURL); err2 == nil {
+							logf("[cookie] 账号 #%d 轮转后恢复可用", conv.accountID)
+							conv.cookie = refreshed.Cookie
+							conv.sapisid = extractSAPISID(refreshed.Cookie)
+							xsrf = tok2
+						}
+					}
+				}
+			}
+			if xsrf == "" {
+				return &StreamResult{
+					ProxyID: p.ID, ProxyName: p.Name,
+					AccountID: conv.accountID, AccountLabel: conv.accountLabel,
+				}, fmt.Errorf("取 XSRF 失败: %w", err)
+			}
+		}
+		conv.xsrf = xsrf
+	}
+
+	// 超长处理三阶段：
+	// 1. 无损压缩（compressPromptLossless，内含在 prepareContextFile 第一步）
+	// 2. 若在 (budget, maxAttachmentIngestBytes] 且有登录 cookie → 走 message.txt 附件单轮发送
+	// 3. 若 > maxAttachmentIngestBytes 或匿名超长 → 走原生会话多轮分块喂入（runChunkedOnSlot）
+	var files []fileRef
+	budget := rtCfg().MaxPromptBytes
+	loginCookie := ""
+	if conv.isLogin {
+		loginCookie = conv.cookie
+	}
+	if pPrompt, f, used, ferr := prepareContextFile(prompt, latest, budget, loginCookie, proxyURL); ferr != nil {
+		return &StreamResult{
+			ProxyID: p.ID, ProxyName: p.Name,
+			AccountID: conv.accountID, AccountLabel: conv.accountLabel,
+		}, ferr
+	} else if used {
+		prompt = pPrompt
+		files = append(files, f...)
+	} else {
+		prompt = pPrompt // 可能已被无损压缩瘦身到 budget 以内
+	}
+
+	if budget > 0 && len(prompt) > budget {
+		if rtCfg().ChunkedMultiTurn && len(prompt) <= maxChunkedPromptBytes {
+			res, cerr := runChunkedOnSlot(prompt, latest, mc, conv, p, xsrf, onDelta, onReasoning)
+			if cerr == nil && rtCfg().AutoDeleteConversation && conv.cookie != "" && xsrf != "" && conv.cid != "" {
+				go deleteConversation(conv.cid, conv.cookie, conv.sapisid, xsrf, p.URL)
+			}
+			return res, cerr
+		}
+		return &StreamResult{
+			ProxyID: p.ID, ProxyName: p.Name,
+			AccountID: conv.accountID, AccountLabel: conv.accountLabel,
+		}, &PromptTooLongError{Bytes: len(prompt), Budget: budget, HasCookie: conv.isLogin}
+	}
+
+	return doSingleConvTurn(prompt, files, mc, conv, p, xsrf, onDelta, onReasoning)
+}
+
+// buildFinalChunkPrompt 构造多轮分块喂入最后一轮的提示词。
+func buildFinalChunkPrompt(lastChunk, latest string, totalChunks, budget int, hasTools bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"[System instruction]: Below is the final Part %d of %d of the conversation context/document. "+
+			"Now combine all %d parts from this session and answer the latest user request directly.\n\n"+
+			"--- BEGIN PART %d/%d ---\n%s\n--- END PART %d/%d ---\n",
+		totalChunks, totalChunks, totalChunks,
+		totalChunks, totalChunks, lastChunk, totalChunks, totalChunks)
+	latest = strings.TrimSpace(latest)
+	if latest != "" && len(latest) <= latestInlineLimit(budget) && !strings.HasSuffix( strings.TrimSpace(lastChunk), latest) {
+		fmt.Fprintf(&b, "\nLatest user request:\n%s\n", latest)
+	}
+	if hasTools {
+		b.WriteString(toolAnchorSuffix)
+	}
+	return b.String()
+}
+
+// runChunkedOnSlot 在已持有出口 slot (p) 的前提下，将超长 prompt 切分成多轮依次喂入同一原生会话。
+// 前 N-1 轮关闭扩展思考以加速摄取且不向客户端吐流；第 N 轮按原模型配置流式返回最终回答。
+func runChunkedOnSlot(prompt, latest string, mc ModelConfig, conv *convState, p Proxy, xsrf string,
+	onDelta, onReasoning func(string)) (*StreamResult, error) {
+	budget := rtCfg().MaxPromptBytes
+	chunkBudget := budget - 4096
+	if chunkBudget <= 0 || chunkBudget > 110000 {
+		chunkBudget = 110000
+	}
+	if budget > 0 && chunkBudget > budget*4/5 {
+		chunkBudget = budget * 4 / 5
+	}
+	chunks := splitPromptIntoChunks(prompt, chunkBudget)
+	if len(chunks) <= 1 {
+		return doSingleConvTurn(prompt, nil, mc, conv, p, xsrf, onDelta, onReasoning)
+	}
+
+	logf("[chunked] 超长上下文 %d 字节，自动拆分为 %d 轮分批注入会话 (每轮 <= %d 字节)",
+		len(prompt), len(chunks), chunkBudget)
+
+	// 匿名会话若还没拿 session cookie，先拿一份以串联多轮
+	if conv.turn == 0 && conv.cookie == "" && !conv.isLogin {
+		c, err := getAnonSession(p.URL)
+		if err != nil {
+			return &StreamResult{ProxyID: p.ID, ProxyName: p.Name}, fmt.Errorf("分块多轮建匿名会话失败: %w", err)
+		}
+		conv.cookie = c
+	}
+
+	tStart := time.Now()
+	// 前 N-1 轮只做上下文摄取，关闭 Thinking 避免每轮花十几秒思考 "OK"
+	ingestMC := mc
+	ingestMC.Thinking = false
+
+	for i := 0; i < len(chunks)-1; i++ {
+		if i > 0 {
+			// 平滑步调防风控：分块之间休眠 800ms ~ 1200ms，避免突发高频触发 Google 防爬虫 302
+			sleepMs := 800 + (time.Now().UnixNano()%400)/1e6
+			time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+
+			// 记录实际发出的分块请求，确保不突破 RPH / RPM 安全红线
+			if ok, reason := recordSlotHit(p.ID); !ok {
+				return &StreamResult{ProxyID: p.ID, ProxyName: p.Name}, &RateLimitError{Reason: reason, ProxyID: p.ID}
+			}
+		}
+
+		partPrompt := fmt.Sprintf(
+			"[System instruction]: Below is Part %d of %d of the conversation context/document. "+
+				"Read and hold this segment in memory for the final request. "+
+				"Do NOT answer the user question or call any tools yet — reply ONLY with \"OK\" and wait for Part %d.\n\n"+
+				"--- BEGIN PART %d/%d ---\n%s\n--- END PART %d/%d ---",
+			i+1, len(chunks), i+2,
+			i+1, len(chunks), chunks[i], i+1, len(chunks),
+		)
+		res, err := doSingleConvTurn(partPrompt, nil, ingestMC, conv, p, xsrf, nil, nil)
+		if err != nil {
+			return res, fmt.Errorf("分块喂入第 %d/%d 轮失败: %w", i+1, len(chunks), err)
+		}
+		logf("[chunked] 第 %d/%d 轮摄取完成 (%d 字节, cid=%s, turn=%d)",
+			i+1, len(chunks), len(chunks[i]), conv.cid, conv.turn)
+	}
+
+	if len(chunks) > 1 {
+		// 最后一轮正式提问前同样平滑缓冲，防止与前一轮摄取贴得太紧
+		sleepMs := 800 + (time.Now().UnixNano()%400)/1e6
+		time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+		if ok, reason := recordSlotHit(p.ID); !ok {
+			return &StreamResult{ProxyID: p.ID, ProxyName: p.Name}, &RateLimitError{Reason: reason, ProxyID: p.ID}
 		}
 	}
 
+	hasTools := strings.Contains(prompt, "```tool_call")
+	finalPrompt := buildFinalChunkPrompt(chunks[len(chunks)-1], latest, len(chunks), budget, hasTools)
+	res, err := doSingleConvTurn(finalPrompt, nil, mc, conv, p, xsrf, onDelta, onReasoning)
+	if res != nil {
+		res.TotalMs = time.Since(tStart).Milliseconds()
+	}
+	return res, err
+}
+
+// doSingleConvTurn 在已持有出口 p 和 xsrf 的条件下执行单轮会话请求并更新 conv 状态。
+func doSingleConvTurn(prompt string, files []fileRef, mc ModelConfig, conv *convState,
+	p Proxy, xsrf string, onDelta, onReasoning func(string)) (*StreamResult, error) {
+	proxyURL := p.URL
+	pickedOK := p.ID > 0
+
 	inner := make([]interface{}, innerSlots)
-	inner[0] = []interface{}{prompt, 0, nil, nil, nil, nil, 0}
+	if len(files) > 0 {
+		refs := make([]interface{}, 0, len(files))
+		for _, f := range files {
+			kind := f.Kind
+			if kind == 0 {
+				kind = 3
+			}
+			mime := f.Mime
+			if mime == "" {
+				mime = "text/plain"
+			}
+			refs = append(refs, []interface{}{
+				[]interface{}{f.Ref, kind, nil, mime}, f.Name,
+				nil, nil, nil, nil, nil, nil,
+				[]interface{}{0},
+			})
+		}
+		inner[0] = []interface{}{prompt, 0, nil, refs, nil, nil, 0}
+	} else {
+		inner[0] = []interface{}{prompt, 0, nil, nil, nil, nil, 0}
+	}
 	inner[1] = []interface{}{"en"}
 	if conv.turn == 0 {
 		inner[2] = []interface{}{"", "", "", nil, nil, nil, nil, nil, nil, ""}
@@ -364,11 +551,18 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 
 	t0 := time.Now()
 	var lastErr error
-	for attempt := 0; attempt < rtCfg().RetryAttempts; attempt++ {
+	attempts := rtCfg().RetryAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		statusCode, raw, ttfb, setCookie, err := doGeminiRequest(endpoint, body, geminiHeaders, proxyURL, lineCB)
 		if len(setCookie) > 0 && conv.cookie != "" {
 			if merged := mergeSetCookie(conv.cookie, setCookie); merged != conv.cookie {
 				conv.cookie = merged
+				if conv.accountID > 0 {
+					updateAccountCookie(conv.accountID, merged)
+				}
 			}
 		}
 		if err != nil || statusCode != 200 || !hasContentFrame(string(raw)) {
@@ -406,6 +600,9 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 		if pickedOK {
 			recordProxyResult(p.ID, true, "")
 		}
+		if conv.accountID > 0 {
+			markCookieByStatus(conv.accountID, 200, "")
+		}
 		return &StreamResult{
 			Emitted:          tracker.emitted,
 			EmittedReasoning: rtracker.emitted,
@@ -415,11 +612,15 @@ func streamGenerateConv(prompt string, mc ModelConfig, conv *convState,
 			ProxyID:          p.ID,
 			ProxyName:        p.Name,
 			AccountID:        conv.accountID,
+			AccountLabel:     conv.accountLabel,
 			TTFBMs:           ttfb,
 			TotalMs:          time.Since(t0).Milliseconds(),
 		}, nil
 	}
-	return &StreamResult{ProxyID: p.ID, ProxyName: p.Name, AccountID: conv.accountID}, lastErr
+	return &StreamResult{
+		ProxyID: p.ID, ProxyName: p.Name,
+		AccountID: conv.accountID, AccountLabel: conv.accountLabel,
+	}, lastErr
 }
 
 // callGeminiConv 是多轮开启时的入口：按历史前缀识别续接。
@@ -434,56 +635,133 @@ func callGeminiConv(messages []map[string]interface{}, mc ModelConfig,
 	conv := convGet(parentKey)
 	fresh := conv == nil
 
-	var prompt string
 	if fresh {
-		conv = &convState{}
-		// 有 cookie 池就用登录号（能力更全），否则匿名（首轮就地拿 session cookie）。
-		// #20 匿名优先：模型不需要登录态时不占号（多轮已被 gate 限成无图无工具，附件
-		// 恒无，所以第二个参数传 false）。必须在调用前短路：pickCookieAccount 会更新
-		// last_used_at，调了不用等于白占一轮。
-		if !anonFirstEligible(mc, false) {
-			if a, ok := pickCookieAccount(); ok {
-				conv.cookie = a.Cookie
-				conv.sapisid = extractSAPISID(a.Cookie)
-				conv.isLogin = true
-				conv.accountID = a.ID
-				conv.proxyID = a.ProxyID
+		budget := rtCfg().MaxPromptBytes
+		triedAccounts := map[int64]bool{}
+		_, enabledAccts := accountCount()
+		maxTries := maxCookieTries
+		if enabledAccts > maxTries {
+			maxTries = enabledAccts
+		}
+		if maxTries < 1 {
+			maxTries = 1
+		}
+
+		var lastErr error
+		var lastRes *StreamResult
+
+		for attempt := 0; attempt < maxTries; attempt++ {
+			conv = &convState{}
+			prompt, latest := messagesToPrompt(messages, tools, toolChoice)
+			needsCookie := budget > 0 && len(prompt) > budget
+
+			if !anonFirstEligible(mc, needsCookie) {
+				if a, ok := pickCookieAccountExcept(triedAccounts); ok {
+					triedAccounts[a.ID] = true
+					conv.cookie = a.Cookie
+					conv.sapisid = extractSAPISID(a.Cookie)
+					conv.isLogin = true
+					conv.accountID = a.ID
+					conv.accountLabel = accountDisplayName(a)
+					conv.proxyID = a.ProxyID
+				} else if len(triedAccounts) > 0 && !rtCfg().FallbackAnon {
+					// 试过的号都不可用且不允许降级匿名
+					break
+				}
+			}
+
+			if attempt == 0 {
+				logf("[conv] 新会话，首轮发 %d 字节（tools=%d, 账号=%s#%d）", len(prompt), len(tools), conv.accountLabel, conv.accountID)
+			} else {
+				logf("[conv] 新会话换号重试 (%d/%d)，切到账号=%s#%d", attempt+1, maxTries, conv.accountLabel, conv.accountID)
+			}
+
+			res, err := streamGenerateConvWithLatest(prompt, latest, mc, conv, onDelta, onReasoning)
+			lastRes = res
+			if err == nil {
+				text := extractResponseText(res.Raw)
+				var toolCalls []ToolCall
+				if len(tools) > 0 {
+					text, toolCalls = parseToolCalls(text)
+				}
+				if text != "" || len(toolCalls) > 0 {
+					convPut(convChildKey(messages, text), conv)
+					if rtCfg().AutoDeleteConversation && conv.cookie != "" && conv.cid != "" && conv.xsrf != "" {
+						go deleteConversation(conv.cid, conv.cookie, conv.sapisid, conv.xsrf, conv.proxyURL)
+					}
+					return text, toolCalls, res, nil
+				}
+				err = fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(res.Raw))
+			}
+
+			lastErr = err
+
+			// 检查是否已经向客户端推送过内容（SSE 数据流），如果已经推送过就不能换号重试了（避免输出重复）
+			if res != nil && (res.Emitted != "" || res.EmittedReasoning != "") {
+				return "", nil, res, err
+			}
+
+			// 如果是 IP 出口槽位已满（并发/RPM/RPH 限流），换 Cookie 账号依然走同一个 IP 出口，徒劳重试无意义，直接返回
+			var rlErr *RateLimitError
+			if errors.As(err, &rlErr) {
+				return "", nil, res, err
+			}
+
+			// 如果当前账号鉴权报错（比如 XSRF 失败、Cookie 失效、401/403 等）才记死，避免模型或上游抖动误杀好号
+			if conv.accountID > 0 {
+				isAuthErr := strings.Contains(err.Error(), "SNlM0e") ||
+					strings.Contains(err.Error(), "401") ||
+					strings.Contains(err.Error(), "403") ||
+					strings.Contains(err.Error(), "XSRF")
+				if isAuthErr {
+					markCookieByStatus(conv.accountID, 401, err.Error())
+				}
+				logf("[cookie] 账号 #%d 失败 (%v)，换池子中下一个可用账号", conv.accountID, err)
+			}
+
+			// 如果不是登录号（即走匿名），或者池子里没有更多可用账号了，就不用继续循环
+			if !conv.isLogin || len(triedAccounts) >= enabledAccts {
+				break
 			}
 		}
-		// 首轮带上 tools 指令：模型要靠它知道怎么吐 tool_call 围栏，续接轮不再重发
-		//（指令已在服务端首轮历史里）。
-		prompt, _ = messagesToPrompt(messages, tools, toolChoice)
-	} else {
-		prompt = formatNewTurn(messages[len(messages)-1])
-	}
-	if fresh {
-		logf("[conv] 新会话，首轮发 %d 字节（tools=%d）", len(prompt), len(tools))
-	} else {
-		logf("[conv] 续接命中 turn=%d，只发 %d 字节（历史留服务端）", conv.turn, len(prompt))
+
+		return "", nil, lastRes, lastErr
 	}
 
-	res, err := streamGenerateConv(prompt, mc, conv, onDelta, onReasoning)
+	// 续接命中已有会话
+	prompt := formatNewTurn(messages[len(messages)-1])
+	latest := latestUserMessage(messages)
+	logf("[conv] 续接命中 turn=%d，只发 %d 字节（历史留服务端）", conv.turn, len(prompt))
+
+	res, err := streamGenerateConvWithLatest(prompt, latest, mc, conv, onDelta, onReasoning)
 	if err != nil {
-		if !fresh {
-			// 续接失败：这路会话作废，客户端重试时会当新会话全量重发。
-			convDelete(parentKey)
+		// 续接失败：这路会话作废
+		convDelete(parentKey)
+		// 如果还没向客户端输出过任何内容，自动降级为新会话（全量重发并允许换号）
+		if res == nil || (res.Emitted == "" && res.EmittedReasoning == "") {
+			logf("[conv] 续接失败 (%v)，未输出内容，自动无感降级为新会话全量重试", err)
+			return callGeminiConv(messages, mc, tools, toolChoice, onDelta, onReasoning)
 		}
 		return "", nil, res, err
 	}
+
 	text := extractResponseText(res.Raw)
 	var toolCalls []ToolCall
 	if len(tools) > 0 {
 		text, toolCalls = parseToolCalls(text)
 	}
 	if text == "" && len(toolCalls) == 0 {
-		if !fresh {
-			convDelete(parentKey)
+		convDelete(parentKey)
+		if res == nil || (res.Emitted == "" && res.EmittedReasoning == "") {
+			logf("[conv] 续接无内容帧，自动无感降级为新会话全量重试")
+			return callGeminiConv(messages, mc, tools, toolChoice, onDelta, onReasoning)
 		}
 		return "", nil, res, fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(res.Raw))
 	}
-	// 存续接状态：客户端下一轮把这段回复原样带回来时，parentKey 会命中这里。
-	// 存的是解析掉围栏后的正文 —— 客户端把 assistant 消息带回来时 content 也是这段。
 	convPut(convChildKey(messages, text), conv)
+	if rtCfg().AutoDeleteConversation && conv.cookie != "" && conv.cid != "" && conv.xsrf != "" {
+		go deleteConversation(conv.cid, conv.cookie, conv.sapisid, conv.xsrf, conv.proxyURL)
+	}
 	return text, toolCalls, res, nil
 }
 

@@ -143,7 +143,16 @@ func Run() {
 		mux.HandleFunc("/admin/api/usage", requireAuth(handleAdminUsage))
 		mux.HandleFunc("/admin/api/config", requireAuth(handleAdminConfig))
 		mux.HandleFunc("/admin/api/cookies", requireAuth(handleAdminCookies))
+		mux.HandleFunc("/admin/api/cookies/sync", requireAuth(handleAdminCookiesSync))
+		mux.HandleFunc("/admin/api/cookies/import-firefox", requireAuth(handleAdminFirefoxImport))
+		mux.HandleFunc("/admin/api/firefox/create-containers", requireAuth(handleAdminFirefoxCreateContainers))
+		mux.HandleFunc("/admin/api/firefox/status", requireAuth(handleAdminFirefoxStatus))
+		mux.HandleFunc("/admin/api/cookies/quota/refresh", requireAuth(handleAdminQuotaRefreshAll))
+		mux.HandleFunc("/admin/api/cookies/check-all", requireAuth(handleAdminCookiesCheckAll))
+		mux.HandleFunc("/admin/api/cookies/clear-all", requireAuth(handleAdminCookiesClearAll))
 		mux.HandleFunc("/admin/api/cookies/", requireAuth(handleAdminCookieItem))
+		mux.HandleFunc("/admin/api/conversations/clear", requireAuth(handleAdminClearConversations))
+		mux.HandleFunc("/admin/api/models/refresh", requireAuth(handleAdminModelsRefresh))
 		mux.HandleFunc("/admin/api/test", requireAuth(handleAdminTest))
 	}
 
@@ -196,6 +205,8 @@ func Run() {
 	fmt.Printf("  Retry:       %dx / %ds\n", rtCfg().RetryAttempts, rtCfg().RetryDelaySec)
 	fmt.Println()
 	warnEnvProxyIgnored()
+
+	startModelAutoSync()
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)

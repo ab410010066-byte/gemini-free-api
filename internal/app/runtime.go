@@ -55,6 +55,14 @@ type RuntimeConfig struct {
 	// 匿名优先（#20）：不需要登录态能力的请求（纯文本、非思考、无工具、无图）走匿名、
 	// 不占 cookie 账号，省账号额度；需要登录才挑号。默认 false，见 modelNeedsLogin。
 	AnonFirst bool `json:"anon_first"`
+
+	// 长文本超限突破引擎（三阶管线）
+	ContextCompression   bool `json:"context_compression"`
+	ContextFileUpload    bool `json:"context_file_upload"`
+	ChunkedMultiTurn     bool `json:"chunked_multi_turn"`
+	ContextFileThreshold int  `json:"context_file_threshold"`
+	ContextFileMaxBytes  int  `json:"context_file_max_bytes"`
+	ChunkRuneSize        int  `json:"chunk_rune_size"`
 }
 
 const runtimeConfigKey = "runtime_config"
@@ -89,10 +97,27 @@ func initRuntimeConfig() {
 
 		AutoDeleteConversation: cfg.AutoDeleteConversation,
 		AnonFirst:              cfg.AnonFirst,
+
+		ContextCompression:   true,
+		ContextFileUpload:    true,
+		ChunkedMultiTurn:     true,
+		ContextFileThreshold: 30000,
+		ContextFileMaxBytes:  155000,
+		ChunkRuneSize:        80000,
 	}
 	if raw := kvGet(runtimeConfigKey); raw != "" {
 		saved := base
 		if err := json.Unmarshal([]byte(raw), &saved); err == nil {
+			// 如果旧配置里没有这些字段，填上合理默认
+			if saved.ContextFileThreshold == 0 {
+				saved.ContextFileThreshold = 30000
+			}
+			if saved.ContextFileMaxBytes == 0 {
+				saved.ContextFileMaxBytes = 155000
+			}
+			if saved.ChunkRuneSize == 0 {
+				saved.ChunkRuneSize = 80000
+			}
 			if err := validateRuntimeConfig(saved); err == nil {
 				base = saved
 			} else {
@@ -133,6 +158,9 @@ func validateRuntimeConfig(c RuntimeConfig) error {
 		{"retention_days", c.RetentionDays, 1, 3650},
 		{"proxy_cooldown_min", c.ProxyCooldownMin, 0, 10080},
 		{"max_prompt_bytes", c.MaxPromptBytes, 0, 10000000},
+		{"context_file_threshold", c.ContextFileThreshold, 1000, 500000},
+		{"context_file_max_bytes", c.ContextFileMaxBytes, 10000, 1000000},
+		{"chunk_rune_size", c.ChunkRuneSize, 1000, 500000},
 	} {
 		if r.v < r.min || r.v > r.max {
 			return fmt.Errorf("%s=%d 超出允许范围 [%d, %d]", r.name, r.v, r.min, r.max)

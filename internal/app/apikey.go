@@ -110,6 +110,11 @@ func requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
+		// 管理面板已登录会话免 API Key 直接可用
+		if c, err := r.Cookie(sessionCookieName); err == nil && validSession(c.Value) {
+			next(w, r)
+			return
+		}
 		got := ""
 		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			got = strings.TrimSpace(h[7:])

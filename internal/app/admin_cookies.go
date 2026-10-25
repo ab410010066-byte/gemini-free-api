@@ -2,10 +2,12 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // keyCookieWants 是判断一条 cookie 是否"复制全了"要看的关键项。
@@ -50,6 +52,14 @@ func cookieAcctView(a CookieAccount) map[string]interface{} {
 	case a.LastOkAt == 0:
 		health = "unknown"
 	}
+
+	var reqTotal, reqSuccess, reqTokens int64
+	_ = getDB().QueryRow(`
+		SELECT COUNT(*),
+		       COALESCE(SUM(CASE WHEN status=200 THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(prompt_tokens + output_tokens), 0)
+		FROM requests WHERE account_id=? OR (account_label=? AND account_label != '')`, a.ID, a.Label).Scan(&reqTotal, &reqSuccess, &reqTokens)
+
 	return map[string]interface{}{
 		"id":           a.ID,
 		"label":        a.Label,
@@ -67,6 +77,10 @@ func cookieAcctView(a CookieAccount) map[string]interface{} {
 		"has_1psidts":  nameSet["__Secure-1PSIDTS"],
 		"proxy_id":     a.ProxyID,
 		"proxy_name":   proxyNameByID(a.ProxyID),
+		"quota":        getAccountQuotaCached(a.ID),
+		"req_total":    reqTotal,
+		"req_success":  reqSuccess,
+		"req_tokens":   reqTokens,
 	}
 }
 
@@ -167,6 +181,21 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "account not found"})
 			return
 		}
+		if action == "quota" {
+			for _, a := range accountList() {
+				if a.ID == id {
+					q, err := refreshAccountQuota(a)
+					if err != nil {
+						writeJSON(w, 200, map[string]interface{}{"ok": false, "error": err.Error(), "quota": q})
+						return
+					}
+					writeJSON(w, 200, map[string]interface{}{"ok": true, "quota": q})
+					return
+				}
+			}
+			writeJSON(w, 404, map[string]string{"error": "account not found"})
+			return
+		}
 		if action != "toggle" {
 			writeJSON(w, 400, map[string]string{"error": "unknown action"})
 			return
@@ -189,9 +218,10 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]interface{}{"status": next})
 	case http.MethodPatch:
 		var p struct {
-			Label  *string `json:"label"`
-			Note   *string `json:"note"`
-			Status *string `json:"status"`
+			Label   *string `json:"label"`
+			Note    *string `json:"note"`
+			Status  *string `json:"status"`
+			ProxyID *int64  `json:"proxy_id"`
 		}
 		body, _ := io.ReadAll(r.Body)
 		if err := json.Unmarshal(body, &p); err != nil {
@@ -203,6 +233,9 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, 400, map[string]string{"error": err.Error()})
 				return
 			}
+		}
+		if p.ProxyID != nil {
+			bindAccountProxy(id, *p.ProxyID)
 		}
 		if p.Label != nil || p.Note != nil {
 			// 只改传了的字段：没传的沿用当前值。
@@ -229,3 +262,193 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
 	}
 }
+
+// handleAdminCookiesSync — POST /admin/api/cookies/sync 供浏览器扩展一键同步 Cookie
+func handleAdminCookiesSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var p struct {
+		Label  string `json:"label"`
+		Cookie string `json:"cookie"`
+		Note   string `json:"note"`
+	}
+	body, _ := io.ReadAll(r.Body)
+	if err := json.Unmarshal(body, &p); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json: " + err.Error()})
+		return
+	}
+	if strings.TrimSpace(p.Cookie) == "" {
+		writeJSON(w, 400, map[string]string{"error": "cookie 不能为空"})
+		return
+	}
+
+	id, updated, err := accountUpsert(p.Label, p.Cookie, p.Note)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+
+	action := "created"
+	if updated {
+		action = "updated"
+		logf("[cookies] 浏览器扩展同步：已更新现有账号 #%d (label=%q)", id, strings.TrimSpace(p.Label))
+	} else {
+		logf("[cookies] 浏览器扩展同步：成功新增账号 #%d (label=%q)", id, strings.TrimSpace(p.Label))
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"ok":      true,
+		"id":      id,
+		"action":  action,
+		"label":   p.Label,
+		"message": fmt.Sprintf("账号 #%d %s 成功", id, map[bool]string{true: "更新", false: "添加"}[updated]),
+	})
+}
+
+// handleAdminClearConversations — POST /admin/api/conversations/clear
+func handleAdminClearConversations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+		return
+	}
+	res, err := ClearAllAccountsConversations()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	total := 0
+	for _, n := range res {
+		total += n
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"ok":      true,
+		"total":   total,
+		"details": res,
+		"message": fmt.Sprintf("已成功清空全部账号的历史会话（共删除 %d 条）", total),
+	})
+}
+
+// handleAdminQuotaRefreshAll — POST /admin/api/cookies/quota/refresh 批量刷新所有启用账号的用量
+func handleAdminQuotaRefreshAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+		return
+	}
+	accts := accountList()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
+	var mu sync.Mutex
+	results := make([]AccountQuota, 0, len(accts))
+
+	for _, a := range accts {
+		if a.Status != "enabled" {
+			continue
+		}
+		wg.Add(1)
+		go func(acc CookieAccount) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			q, _ := refreshAccountQuota(acc)
+			if q != nil {
+				mu.Lock()
+				results = append(results, *q)
+				mu.Unlock()
+			}
+		}(a)
+	}
+	wg.Wait()
+	writeJSON(w, 200, map[string]interface{}{
+		"ok":      true,
+		"count":   len(results),
+		"results": results,
+		"message": fmt.Sprintf("已成功刷新 %d 个账号的用量限制", len(results)),
+	})
+}
+
+// handleAdminCookiesCheckAll — POST /admin/api/cookies/check-all 批量检测所有启用账号
+func handleAdminCookiesCheckAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+		return
+	}
+	accts := accountList()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
+	var mu sync.Mutex
+
+	total := 0
+	passed := 0
+	failed := 0
+	type checkRes struct {
+		ID        int64  `json:"id"`
+		Label     string `json:"label"`
+		OK        bool   `json:"ok"`
+		Detail    string `json:"detail"`
+		TookMs    int64  `json:"took_ms"`
+		ProxyName string `json:"proxy_name"`
+	}
+	results := make([]checkRes, 0, len(accts))
+
+	for _, a := range accts {
+		if a.Status != "enabled" {
+			continue
+		}
+		total++
+		wg.Add(1)
+		go func(acc CookieAccount) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			chk := checkAccountCookie(acc)
+			mu.Lock()
+			if chk.OK {
+				passed++
+			} else {
+				failed++
+			}
+			results = append(results, checkRes{
+				ID:        acc.ID,
+				Label:     acc.Label,
+				OK:        chk.OK,
+				Detail:    chk.Detail,
+				TookMs:    chk.TookMs,
+				ProxyName: chk.ProxyName,
+			})
+			mu.Unlock()
+		}(a)
+	}
+	wg.Wait()
+	writeJSON(w, 200, map[string]interface{}{
+		"ok":      true,
+		"total":   total,
+		"passed":  passed,
+		"failed":  failed,
+		"results": results,
+		"message": fmt.Sprintf("检测完成：共 %d 个账号，%d 个正常，%d 个异常", total, passed, failed),
+	})
+}
+
+// handleAdminCookiesClearAll — POST /admin/api/cookies/clear-all 一键清空 Cookie 池
+func handleAdminCookiesClearAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+		return
+	}
+	res, err := getDB().Exec(`DELETE FROM accounts`)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	rowsAffected, _ := res.RowsAffected()
+	logf("[cookies] 已一键清空 Cookie 池，共删除 %d 条账号记录", rowsAffected)
+	writeJSON(w, 200, map[string]interface{}{
+		"ok":      true,
+		"deleted": rowsAffected,
+		"message": fmt.Sprintf("已成功清空 Cookie 池（共删除 %d 个账号）", rowsAffected),
+	})
+}
+
+

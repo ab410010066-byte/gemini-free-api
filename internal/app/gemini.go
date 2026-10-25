@@ -19,14 +19,15 @@ import (
 // Gemini 服务端认的模型 id，来自 batchexecute?rpcids=otAQ7b 返回的权威清单。
 const (
 	hexFlash36   = "fbb127bbb056c959" // 3.6 Flash
-	hexFlashLite = "cf41b0e0dd7d53e5" // 3.5 Flash-Lite
-	hexPro31     = "9d8ca3786ebdfbea" // 3.1 Pro
+	hexFlashLite = "8c46e95b1a07cecc" // 3.5 Flash-Lite (Google 网页端最新 HexID)
+	hexPro31     = "e6fa609c3fa255c0" // 3.1 Pro (Google 网页端最新 HexID；原 9d8ca3786ebdfbea 已废弃)
 	// 3.7 Flash：按账号灰度放出。hex 是 otAQ7b 里 3.7 条目的**主 hex**（第一个元素），
 	// 两个独立已灰度账号的清单里都是它、且有 3.7 号的用户实测发它回报 "3.7 Flash"
 	// （issue #4 / PR #11）。注意别用 compat 列表里那个 797f3d0293f288ad —— 那是
 	// "当前 Flash" 泛指针，老批次号发它拿到的是 3.6，会冒充 3.7。老批次号发这个主 hex
 	// 会干净降级成 3.5 Flash-Lite（跟 3.1 Pro 一样），所以 gate 成要 cookie。
 	hexFlash38 = "56fdd199312815e2" // 3.8 Flash（原记 3.7；Google 把这个 hex 原地升成 3.8，HAR 响应帧显示名已是 "3.8 Flash"）
+	hexArgon   = "95a4c0abcba24364" // 4 Argon（Google 网页端前沿推理模型，官方权威清单标记 locked: true 锁死）
 )
 
 // innerSlots 是 payload 里 inner 数组的长度。浏览器发 97-98 槽，我们原来只开 80，
@@ -70,21 +71,23 @@ type ModelConfig struct {
 // 以为有五种不同的模型可选。
 var Models = map[string]ModelConfig{
 	"gemini-3.6-flash":      {HexID: hexFlash36, Mode: 1, Desc: "Latest all-around model"},
-	"gemini-3.5-flash-lite": {HexID: hexFlashLite, Mode: 6, Desc: "Fastest, lightweight"},
-	"gemini-3.1-pro":        {HexID: hexPro31, Mode: 3, Desc: "Most capable; needs a signed-in cookie (downgraded to Flash-Lite without one)"},
+	"gemini-3.5-flash-lite": {HexID: hexFlashLite, Mode: 2, Desc: "Fastest, lightweight"},
+	"gemini-3.1-pro":        {HexID: hexPro31, Mode: 2, Desc: "Most capable; needs a signed-in cookie (downgraded to Flash-Lite without one)"},
 	// 3.8 Flash：Google 把原 3.7 那个 hex 原地升级了（同 hex，服务端显示名从 3.7 变 3.8）。
 	// 实测是**付费号专属**（不是灰度）：只有付费 Gemini 账号有，免费号降级成 3.5 Flash-Lite。
 	// gemini-3.7-flash 保留为别名（同 hex）。
-	"gemini-3.8-flash": {HexID: hexFlash38, Mode: 1, Desc: "3.8 Flash; needs a signed-in PAID Google account (free accounts get downgraded to 3.5 Flash-Lite)"},
-	"gemini-3.7-flash": {HexID: hexFlash38, Mode: 1, Desc: "alias of gemini-3.8-flash (same hex; Google renamed 3.7→3.8)"},
+	"gemini-3.8-flash": {HexID: hexFlash38, Mode: 2, Desc: "3.8 Flash; needs a signed-in PAID Google account (free accounts get downgraded to 3.5 Flash-Lite)"},
+	"gemini-3.7-flash": {HexID: hexFlash38, Mode: 2, Desc: "alias of gemini-3.8-flash (same hex; Google renamed 3.7→3.8)"},
 
 	// 扩展思考版。inner[80]=2 跟模型 hex 正交，都能开；但只在登录态生效，
 	// 所以跟 3.1 Pro 一样在没 cookie 时不暴露。
 	"gemini-3.6-flash-thinking":      {HexID: hexFlash36, Mode: 1, Thinking: true, Desc: "3.6 Flash with extended thinking; needs a signed-in cookie"},
-	"gemini-3.5-flash-lite-thinking": {HexID: hexFlashLite, Mode: 6, Thinking: true, Desc: "3.5 Flash-Lite with extended thinking; needs a signed-in cookie"},
-	"gemini-3.1-pro-thinking":        {HexID: hexPro31, Mode: 3, Thinking: true, Desc: "3.1 Pro with extended thinking; needs a signed-in cookie"},
-	"gemini-3.8-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Desc: "3.8 Flash with extended thinking; needs a signed-in cookie"},
-	"gemini-3.7-flash-thinking":      {HexID: hexFlash38, Mode: 1, Thinking: true, Desc: "alias of gemini-3.8-flash-thinking"},
+	"gemini-3.5-flash-lite-thinking": {HexID: hexFlashLite, Mode: 2, Thinking: true, Desc: "3.5 Flash-Lite with extended thinking; needs a signed-in cookie"},
+	"gemini-3.1-pro-thinking":        {HexID: hexPro31, Mode: 2, Thinking: true, Desc: "3.1 Pro with extended thinking; needs a signed-in cookie"},
+	"gemini-3.8-flash-thinking":      {HexID: hexFlash38, Mode: 2, Thinking: true, Desc: "3.8 Flash with extended thinking; needs a signed-in cookie"},
+	"gemini-3.7-flash-thinking":      {HexID: hexFlash38, Mode: 2, Thinking: true, Desc: "alias of gemini-3.8-flash-thinking"},
+	"gemini-4-argon":                 {HexID: hexArgon, Mode: 2, Thinking: true, Desc: "Gemini 4 Argon; Google flagship frontier reasoning model (server-side locked by Google)"},
+	"gemini-argon":                   {HexID: hexArgon, Mode: 2, Thinking: true, Desc: "alias of gemini-4-argon"},
 
 	// 媒体生成。inner[49] 一填，服务端换后端模型出图/出乐；产物走 hNvQHb + 下载 host
 	// 取回，以 base64 data URL 塞进 content 返回。都要登录态，没 cookie 时不暴露。
@@ -110,7 +113,7 @@ func hasCookie() bool {
 // 逐模型核对等价：那三个正名的 HexID 就是 hexPro31 / hexFlash38，其余登录模型都被
 // Thinking 或 Tool 覆盖。
 func modelNeedsLogin(mc ModelConfig) bool {
-	return mc.HexID == hexPro31 || mc.HexID == hexFlash38 || mc.Thinking || mc.Tool > 0
+	return mc.HexID == hexPro31 || mc.HexID == hexFlash38 || mc.HexID == hexArgon || mc.Thinking || mc.Tool > 0
 }
 
 // anonFirstEligible 判断「匿名优先」开关下这次请求能不能走匿名（不占 cookie 账号）：
@@ -131,12 +134,12 @@ func anonFirstEligible(mc ModelConfig, hasAttachment bool) bool {
 // 登录也只能拿到 3.6 Flash 扩展」是在缺 XSRF token 的条件下测的，那时候带
 // cookie 的请求根本发不出去（见 xsrf.go）。
 func availableModels() map[string]ModelConfig {
-	if hasCookie() {
-		return Models
-	}
+	modelsMu.RLock()
+	defer modelsMu.RUnlock()
 	out := make(map[string]ModelConfig, len(Models))
+	has := hasCookie()
 	for k, v := range Models {
-		if modelNeedsLogin(v) {
+		if !has && modelNeedsLogin(v) {
 			continue
 		}
 		out[k] = v
@@ -154,9 +157,13 @@ func resolveModel(modelName string) (string, ModelConfig, error) {
 	if idx := strings.Index(modelName, "@think="); idx >= 0 {
 		modelName = modelName[:idx]
 	}
+	modelName = strings.TrimSpace(modelName)
 	mc, ok := availableModels()[modelName]
 	if !ok {
-		if full, exists := Models[modelName]; exists && !hasCookie() {
+		modelsMu.RLock()
+		full, exists := Models[modelName]
+		modelsMu.RUnlock()
+		if exists && !hasCookie() {
 			downgrade := "are silently downgraded to 3.5 Flash-Lite"
 			if full.Tool > 0 {
 				downgrade = "are silently downgraded to a plain \"Are you signed in?\" text reply"
@@ -315,7 +322,9 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 	// #20 匿名优先：不需要登录态能力时不占用 cookie 账号，走匿名省额度（见 anonFirstEligible）。
 	// 带附件（图/视频）时不能走匿名——下面 uploadBytes 那段会因 cookieStr=="" 直接报错。
 	var acct *CookieAccount
-	if !anonFirstEligible(mc, len(pending) > 0) {
+	budget := rtCfg().MaxPromptBytes
+	needsLoginForAttachment := len(pending) > 0 || (budget > 0 && len(prompt) > budget)
+	if !anonFirstEligible(mc, needsLoginForAttachment) {
 		if a, ok := pickCookieAccount(); ok {
 			acct = a
 		}
@@ -426,39 +435,61 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		logf("[cookie] 试过的 %d 个账号都不可用，本次降级匿名（能力会退化到匿名档）", len(tried))
 		cookieID, cookieLabel = 0, ""
 	}
-	// 图片附件：上传要 cookie，而且必须走跟正式请求同一个出口，所以排在这里。
+	// 附件（图片 / 视频 / 文档 / 音频）：上传要 cookie，且必须走跟正式请求同一个出口。
 	if len(pending) > 0 {
 		if cookieStr == "" {
-			return attrib(fmt.Errorf("image input needs a Google account cookie: " +
+			return attrib(fmt.Errorf("image/file input needs a Google account cookie: " +
 				"anonymous uploads succeed but referencing them in a conversation is " +
 				"rejected upstream. Add a cookie in the admin panel (Cookie pool)"))
 		}
-		nImg, nVid := 0, 0
+		nImg, nVid, nDoc := 0, 0, 0
 		for _, u := range pending {
 			ref, uerr := uploadBytes(cookieStr, proxyURL, u.Data, u.Name)
 			if uerr != nil {
 				return attrib(fmt.Errorf("上传附件 %s 失败: %w", u.Name, uerr))
 			}
 			files = append(files, fileRef{Ref: ref, Name: u.Name, Kind: u.Kind, Mime: u.Mime})
-			if u.Kind == 2 {
+			switch u.Kind {
+			case 2:
 				nVid++
-			} else {
+			case 3:
+				nDoc++
+			default:
 				nImg++
 			}
 		}
-		logf("[vision] 上传了 %d 张图 / %d 个视频", nImg, nVid)
+		logf("[vision] 上传了 %d 张图 / %d 个视频 / %d 份文件", nImg, nVid, nDoc)
 	}
 
-	// prompt 超长时转成文本附件。要等挑完号和出口才能做：上传要 cookie，
-	// 而且必须走跟正式请求同一个出口。
-	budget := rtCfg().MaxPromptBytes
-	if p, f, used, ferr := prepareContextFile(prompt, latest, budget, cookieStr, proxyURL); ferr != nil {
+	// prompt 超长时三阶段处理：
+	// 1. 无损压缩（内含在 prepareContextFile）
+	// 2. 若在 (budget, maxAttachmentIngestBytes] 且有 cookie → 转成 message.txt 附件
+	// 3. 若仍 > budget（超过单附件 155KB 上限或匿名）→ 自动借用原生会话多轮分块喂入
+	if pPrompt, f, used, ferr := prepareContextFile(prompt, latest, budget, cookieStr, proxyURL); ferr != nil {
 		return attrib(ferr)
 	} else if used {
-		prompt = p
+		prompt = pPrompt
 		files = append(files, f...)
+	} else {
+		prompt = pPrompt
 	}
 	if budget > 0 && len(prompt) > budget {
+		if rtCfg().ChunkedMultiTurn && len(pending) == 0 && mc.Tool == 0 && len(prompt) <= maxChunkedPromptBytes {
+			conv := &convState{
+				cookie:       cookieStr,
+				sapisid:      sapisid,
+				isLogin:      cookieStr != "",
+				accountID:    cookieID,
+				accountLabel: cookieLabel,
+				proxyID:      picked.ID,
+				proxyURL:     proxyURL,
+			}
+			res, cerr := runChunkedOnSlot(prompt, latest, mc, conv, picked, xsrfToken, onDelta, onReasoning)
+			if cerr == nil && rtCfg().AutoDeleteConversation && cookieStr != "" && xsrfToken != "" && conv.cid != "" {
+				go deleteConversation(conv.cid, conv.cookie, conv.sapisid, xsrfToken, proxyURL)
+			}
+			return res, cerr
+		}
 		return attrib(&PromptTooLongError{
 			Bytes: len(prompt), Budget: budget, HasCookie: cookieStr != "",
 		})
@@ -591,7 +622,11 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		}
 	}
 
-	for attempt := 0; attempt < rtCfg().RetryAttempts; attempt++ {
+	attempts := rtCfg().RetryAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		statusCode, raw, ttfb, setCookie, err := doGeminiRequest(endpoint, body, geminiHeaders, proxyURL, lineCB)
 		if len(setCookie) > 0 && cookieID > 0 {
 			if merged := mergeSetCookie(cookieStr, setCookie); merged != cookieStr {
@@ -651,6 +686,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		// （1096 = 会话未持久化），拿它判错会把每个正常响应都判成失败。
 		if !hasContentFrame(string(raw)) {
 			lastErr = fmt.Errorf("upstream returned no content frame (raw %d bytes)", len(raw))
+			logf("[gemini] 上游无内容帧详细: %s", string(raw))
 			if pickedOK {
 				// 记进代理健康度：1155 跟出口质量强相关（干净出口 60+ 次 0 发生，
 				// 脏出口一天约 9 次），连续踩中说明这个出口该歇了。
@@ -720,15 +756,51 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 
 // upstreamModelRe 匹配响应帧里服务端自报的模型显示名（帧的 [42] 位）。
 // 形如 ...,"fbb127bbb056c959",null,null,"3.6 Flash",true,...
-var upstreamModelRe = regexp.MustCompile(`\\"[0-9a-f]{16}\\",null,null,\\"([^"\\]{1,40})\\"`)
+var upstreamModelRe = regexp.MustCompile(`\\"([0-9a-f]{16})\\",null,null,\\"([^"\\]{1,40})\\"`)
 
-// extractUpstreamModel 取服务端实际使用的模型名，取不到返回空串。
+// extractUpstreamModel 取服务端实际使用的模型名。
+// Google 服务端响应帧里的文字字段往往统一定义为 "3.5 Flash-Lite" / "3.5 Flash-Lite High"（内部基础框架名），
+// 真实路由与执行模型由其前方的 16 位 HexID 严格决定，因此优先按权威 HexID 反查官方真实模型。
 func extractUpstreamModel(raw string) string {
 	m := upstreamModelRe.FindAllStringSubmatch(raw, -1)
 	if len(m) == 0 {
 		return ""
 	}
-	return m[len(m)-1][1]
+	last := m[len(m)-1]
+	hexID := last[1]
+	rawLabel := last[2]
+
+	hasThinking := strings.Contains(rawLabel, "High") || extractReasoning(raw) != ""
+
+	switch hexID {
+	case hexArgon: // 95a4c0abcba24364
+		if hasThinking {
+			return "4 Argon (Thinking)"
+		}
+		return "4 Argon"
+	case hexPro31: // e6fa609c3fa255c0
+		if hasThinking {
+			return "3.1 Pro (Thinking)"
+		}
+		return "3.1 Pro"
+	case hexFlash38: // 56fdd199312815e2
+		if hasThinking {
+			return "3.8 Flash (Thinking)"
+		}
+		return "3.8 Flash"
+	case hexFlash36: // fbb127bbb056c959
+		if hasThinking && !strings.Contains(rawLabel, "扩展") {
+			return "3.6 Flash (Thinking)"
+		}
+		return rawLabel
+	case hexFlashLite, "cf41b0e0dd7d53e5":
+		if hasThinking {
+			return "3.5 Flash-Lite (Thinking)"
+		}
+		return "3.5 Flash-Lite"
+	}
+
+	return rawLabel
 }
 
 // buildModelHeader 拼 x-goog-ext-525001261-jspb，形状逐槽取自抓包：
@@ -827,8 +899,10 @@ func doGeminiRequest(endpoint, body string, headers map[string]string, proxyURL 
 	defer resp.Body.Close()
 	raw, ttfb, err := readBody(resp.Body, onLine, sendAt)
 	if err != nil {
+		logf("[gemini] doGeminiRequest readBody err: %v", err)
 		return resp.StatusCode, nil, ttfb, resp.Header.Values("Set-Cookie"), err
 	}
+	logf("[gemini] doGeminiRequest status=%d len(raw)=%d err=%v (head: %s)", resp.StatusCode, len(raw), err, truncate(string(raw), 100))
 	return resp.StatusCode, raw, ttfb, resp.Header.Values("Set-Cookie"), nil
 }
 

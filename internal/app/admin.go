@@ -50,6 +50,13 @@ func authOK(r *http.Request) bool {
 
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !authOK(r) {
 			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
 			return
@@ -179,6 +186,35 @@ func handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		prows.Close()
 	}
 	stats["by_proxy"] = byProxy
+
+	// per-account breakdown
+	arows, _ := getDB().Query(`SELECT COALESCE(account_label, '(unknown)') as a, COUNT(*),
+        SUM(CASE WHEN status=200 THEN 1 ELSE 0 END),
+        COALESCE(AVG(total_ms),0),
+        COALESCE(SUM(prompt_tokens),0),
+        COALESCE(SUM(output_tokens),0)
+        FROM requests WHERE ts >= ? AND account_label != '' GROUP BY a ORDER BY 2 DESC`, since)
+	var byAccount []map[string]interface{}
+	if arows != nil {
+		for arows.Next() {
+			var a string
+			var c, ok int
+			var avgMs float64
+			var pt, ot int64
+			if err := arows.Scan(&a, &c, &ok, &avgMs, &pt, &ot); err == nil {
+				byAccount = append(byAccount, map[string]interface{}{
+					"account":       a,
+					"requests":      c,
+					"success":       ok,
+					"avg_ms":        int(avgMs),
+					"prompt_tokens": pt,
+					"output_tokens": ot,
+				})
+			}
+		}
+		arows.Close()
+	}
+	stats["by_account"] = byAccount
 
 	writeJSON(w, 200, stats)
 }

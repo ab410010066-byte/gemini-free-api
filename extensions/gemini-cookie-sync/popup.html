@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>Gemini Cookie Sync</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 340px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .status-badge.error {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+
+    .card-title {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+
+    .info-val {
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s, transform 0.05s;
+    }
+
+    .btn:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn:disabled {
+      background: #475569;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      margin-top: 8px;
+      padding: 6px;
+      font-size: 12px;
+      font-weight: normal;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+    }
+
+    .msg-box {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      display: none;
+      word-break: break-all;
+    }
+
+    .msg-box.success {
+      display: block;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .msg-box.error {
+      display: block;
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .settings-panel {
+      display: none;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border);
+    }
+
+    .settings-panel.open {
+      display: block;
+    }
+
+    .field {
+      margin-bottom: 8px;
+    }
+
+    .field label {
+      display: block;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 3px;
+    }
+
+    .field input {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: white;
+      padding: 5px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: monospace;
+    }
+
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .links {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 12px;
+      font-size: 11px;
+    }
+
+    .links a {
+      color: #60a5fa;
+      text-decoration: none;
+    }
+
+    .links a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">
+      <span>✨</span> Gemini Cookie Sync
+    </div>
+    <div id="statusBadge" class="status-badge">
+      <span>●</span> <span id="statusText">檢測中...</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">
+      <span>當前狀態</span>
+      <span id="tabStatus">檢查頁面...</span>
+    </div>
+    <div class="info-row">
+      <span style="color: var(--text-muted);">伺服器</span>
+      <span class="info-val" id="serverHost">http://localhost:8083</span>
+    </div>
+    <div class="info-row">
+      <span style="color: var(--text-muted);">帳號池現況</span>
+      <span class="info-val" id="poolCount">-</span>
+    </div>
+  </div>
+
+  <button id="syncBtn" class="btn">
+    <span>🚀</span> 一鍵抓取並同步此帳號
+  </button>
+
+  <div id="msgBox" class="msg-box"></div>
+
+  <button id="toggleSettings" class="btn btn-secondary">
+    ⚙️ 高級配置與自動同步
+  </button>
+
+  <div id="settingsPanel" class="settings-panel">
+    <div class="field">
+      <label>伺服器網址 (Server URL)</label>
+      <input type="text" id="cfgServerUrl" value="http://localhost:8083">
+    </div>
+    <div class="field">
+      <label>管理員 Token (Admin Token)</label>
+      <input type="password" id="cfgAdminToken" value="" placeholder="输入 Admin Token">
+    </div>
+    <div class="field">
+      <label>帳號標籤 Label (選填，留空自動偵測)</label>
+      <input type="text" id="cfgLabel" placeholder="e.g. my-google-account">
+    </div>
+    <div class="switch-row">
+      <span>造訪 Gemini 時自動背景同步</span>
+      <input type="checkbox" id="cfgAutoSync">
+    </div>
+    <button id="saveCfgBtn" class="btn btn-secondary" style="margin-top: 8px;">保存設置</button>
+  </div>
+
+  <div class="links">
+    <a href="#" id="linkGemini">開啟 Gemini 網頁 ↗</a>
+    <a href="#" id="linkAdmin">開啟後台管理 ↗</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

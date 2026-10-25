@@ -21,14 +21,22 @@ func startScheduler() {
 		daily := time.NewTicker(1 * time.Hour)
 		retention := time.NewTicker(6 * time.Hour)
 		proxyReload := time.NewTicker(60 * time.Second)
-		// 会话保活：启动后先尽快刷一次 1PSIDTS（导入的票可能已经快到期），
-		// 之后按服务端在轮转页里指定的间隔走（实测 600 秒）。
-		rotate := time.NewTimer(firstRotateDelay)
+		// 本地 Firefox 容器自动无感同步：每 10 分钟在本地静默同步一次 Firefox 容器中的最新登录态。
+		// 取代对 Google 的主动抢票轮转，由 Firefox 负责官方续约保活，避免 Token 冲突导致 Firefox 自动登出。
+		firefoxSync := time.NewTicker(10 * time.Minute)
 		defer hourly.Stop()
 		defer daily.Stop()
 		defer retention.Stop()
 		defer proxyReload.Stop()
-		defer rotate.Stop()
+		defer firefoxSync.Stop()
+
+		// 启动后 5 秒先在本地静默同步一次
+		go func() {
+			time.Sleep(5 * time.Second)
+			if c, u, _, err := SyncAllFirefoxContainers(); err == nil && (c > 0 || u > 0) {
+				logf("[scheduler] 首次自动同步：已从本地 Firefox 同步 %d 个容器账号 (更新 %d, 新增 %d)", c+u, u, c)
+			}
+		}()
 
 		for {
 			select {
@@ -40,8 +48,10 @@ func startScheduler() {
 				retentionSweep()
 			case <-proxyReload.C:
 				loadProxies()
-			case <-rotate.C:
-				rotate.Reset(rotateAllAccounts())
+			case <-firefoxSync.C:
+				if c, u, _, err := SyncAllFirefoxContainers(); err == nil && (c > 0 || u > 0) {
+					logf("[scheduler] 定时自动同步：已从本地 Firefox 同步 %d 个容器账号 (更新 %d, 新增 %d)", c+u, u, c)
+				}
 			}
 		}
 	}()

@@ -121,8 +121,12 @@ func rejectUnsupported(req map[string]interface{}, messages []map[string]interfa
 						"uploads succeed but referencing them in a conversation is rejected " +
 						"upstream. Add a cookie in the admin panel (Cookie pool)")
 				}
-			case "input_audio":
-				return fmt.Errorf("audio input not supported")
+			case "file", "input_file", "input_audio":
+				if !hasCookie() {
+					return fmt.Errorf("file/audio input needs a Google account cookie: anonymous " +
+						"uploads succeed but referencing them in a conversation is rejected " +
+						"upstream. Add a cookie in the admin panel (Cookie pool)")
+				}
 			}
 		}
 	}

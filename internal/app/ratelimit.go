@@ -98,6 +98,31 @@ func slotRelease(proxyID int64) {
 	}
 }
 
+// recordSlotHit 记录单次发出的 HTTP 请求（用于分块多轮中每一轮子请求），
+// 在不改变并发计数的条件下做滑动窗口计数与配额检查，防止超长上下文分块瞬间击穿出口限额。
+func recordSlotHit(proxyID int64) (bool, string) {
+	s := getSlot(proxyID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	cutMin := now - 60
+	cutHour := now - 3600
+	s.minuteWin = pruneTimestamps(s.minuteWin, cutMin)
+	s.hourWin = pruneTimestamps(s.hourWin, cutHour)
+
+	if rtCfg().PerIPRPM > 0 && len(s.minuteWin) >= rtCfg().PerIPRPM {
+		return false, "rpm"
+	}
+	if rtCfg().PerIPRPH > 0 && len(s.hourWin) >= rtCfg().PerIPRPH {
+		return false, "rph"
+	}
+
+	s.minuteWin = append(s.minuteWin, now)
+	s.hourWin = append(s.hourWin, now)
+	return true, ""
+}
+
 // SlotUsage admin UI 看用量用。
 type SlotUsage struct {
 	ProxyID   int64 `json:"proxy_id"`

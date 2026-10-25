@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Cookie Sync (本地 API 帳號助手)",
+  "version": "1.0.0",
+  "description": "開啟 Gemini 網頁登入後，一鍵或自動抓取 Cookie 同步至本地 API (http://localhost:8083)",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "gemini-cookie-sync@local",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "cookies",
+    "storage",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://*.google.com/*",
+    "https://gemini.google.com/*",
+    "http://localhost:8083/*",
+    "http://127.0.0.1:8083/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

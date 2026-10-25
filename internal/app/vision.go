@@ -25,20 +25,25 @@ const maxImageBytes = 12 * 1024 * 1024
 // 既能覆盖常见短片、又不至于把请求挂死的值。超了直接报错。
 const maxVideoBytes = 50 * 1024 * 1024
 
+// 文档/音频文件体积上限（50MB）。
+const maxDocBytes = 50 * 1024 * 1024
+
 // pendingUpload 是还没上传的附件。真正上传要等挑完账号和出口，
 // 所以从 handler 到 streamGenerate 之间先这样带着。
 type pendingUpload struct {
 	Data []byte
 	Name string
 	Mime string
-	Kind int // 1=图片，2=视频，3=文本/普通文件
+	Kind int // 1=图片，2=视频，3=文本/PDF/音频/普通文件
 }
 
-// collectImages 从 OpenAI 格式的 messages 里把图片抠出来。
+// collectImages 从 OpenAI 格式的 messages 里把附件（图片、视频、PDF/文档、音频）抠出来。
 //
-// 认两种写法：content 数组里的 image_url（OpenAI Chat）和 input_image（Responses）。
-// 图片来源支持 data URL 和 http(s) 链接，后者会下载下来再传 —— 直接把链接给上游
-// 是不行的，它只认自己存储里的附件。
+// 认以下写法：
+//   - image_url / input_image（含被客户端塞进 image_url 的 data:application/pdf 等文档）
+//   - video_url / input_video
+//   - file / input_file（OpenAI Chat / Responses 标准文件块）
+//   - input_audio（OpenAI 音频输入块）
 func collectImages(messages []map[string]interface{}, proxyURL string) ([]pendingUpload, error) {
 	var out []pendingUpload
 	for _, m := range messages {
@@ -51,7 +56,7 @@ func collectImages(messages []map[string]interface{}, proxyURL string) ([]pendin
 			if !ok {
 				continue
 			}
-			var src string
+			var src, customName string
 			switch getStr(cm, "type") {
 			case "image_url":
 				if iu, ok := cm["image_url"].(map[string]interface{}); ok {
@@ -69,20 +74,75 @@ func collectImages(messages []map[string]interface{}, proxyURL string) ([]pendin
 				}
 			case "input_video":
 				src = firstNonEmpty(getStr(cm, "video_url"), getStr(cm, "url"), getStr(cm, "data"))
+			case "file":
+				if fm, ok := cm["file"].(map[string]interface{}); ok {
+					customName = getStr(fm, "filename")
+					src = firstNonEmpty(getStr(fm, "file_data"), getStr(fm, "url"), getStr(fm, "data"))
+				} else {
+					src = getStr(cm, "file")
+				}
+				if src != "" && !strings.HasPrefix(src, "data:") && !strings.HasPrefix(src, "http") {
+					mime := guessMimeFromFilename(customName)
+					src = "data:" + mime + ";base64," + src
+				}
+			case "input_file":
+				customName = getStr(cm, "filename")
+				src = firstNonEmpty(getStr(cm, "file_data"), getStr(cm, "file_url"), getStr(cm, "url"), getStr(cm, "data"))
+				if src != "" && !strings.HasPrefix(src, "data:") && !strings.HasPrefix(src, "http") {
+					mime := guessMimeFromFilename(customName)
+					src = "data:" + mime + ";base64," + src
+				}
+			case "input_audio":
+				if am, ok := cm["input_audio"].(map[string]interface{}); ok {
+					dataB64 := getStr(am, "data")
+					format := strings.ToLower(strings.TrimSpace(getStr(am, "format")))
+					if format == "" {
+						format = "mp3"
+					}
+					mime := "audio/mpeg"
+					if format == "wav" {
+						mime = "audio/wav"
+					} else if format == "ogg" {
+						mime = "audio/ogg"
+					} else if format != "mp3" {
+						mime = "audio/" + format
+					}
+					if dataB64 != "" {
+						src = "data:" + mime + ";base64," + dataB64
+					}
+				}
 			default:
 				continue
 			}
 			if strings.TrimSpace(src) == "" {
 				continue
 			}
-			img, err := materializeImage(src, proxyURL, len(out)+1)
+			item, err := materializeMedia(src, customName, proxyURL, len(out)+1)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, img)
+			out = append(out, item)
 		}
 	}
 	return out, nil
+}
+
+func guessMimeFromFilename(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case strings.HasSuffix(lower, ".pdf"):
+		return "application/pdf"
+	case strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown"):
+		return "text/markdown"
+	case strings.HasSuffix(lower, ".csv"):
+		return "text/csv"
+	case strings.HasSuffix(lower, ".json"):
+		return "application/json"
+	case strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm"):
+		return "text/html"
+	default:
+		return "text/plain"
+	}
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -94,13 +154,26 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// materializeImage 把一个图片来源变成待上传的字节。
+// materializeImage 保留原函数签名供兼容调用。
 func materializeImage(src, proxyURL string, idx int) (pendingUpload, error) {
+	return materializeMedia(src, "", proxyURL, idx)
+}
+
+// materializeMedia 把一个附件来源变成待上传的字节。
+func materializeMedia(src, customName, proxyURL string, idx int) (pendingUpload, error) {
 	if strings.HasPrefix(src, "data:") {
-		return decodeDataURL(src, idx)
+		u, err := decodeDataURL(src, idx)
+		if err == nil && customName != "" {
+			u.Name = sanitizeUploadName(customName)
+		}
+		return u, err
 	}
 	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-		return fetchImage(src, proxyURL, idx)
+		u, err := fetchImage(src, proxyURL, idx)
+		if err == nil && customName != "" {
+			u.Name = sanitizeUploadName(customName)
+		}
+		return u, err
 	}
 	return pendingUpload{}, fmt.Errorf("image %d: unsupported source (want a data: URL or http(s) link)", idx)
 }
@@ -131,8 +204,7 @@ func decodeDataURL(src string, idx int) (pendingUpload, error) {
 	return newMediaUpload(data, mime, idx)
 }
 
-// fetchImage 下载远程图片。走跟正式请求同一个出口：图从别的 IP 拉、对话从这个 IP 发，
-// 除了慢一点没别的好处，还多暴露一个出口。
+// fetchImage 下载远程图片或文件。走跟正式请求同一个出口。
 func fetchImage(src, proxyURL string, idx int) (pendingUpload, error) {
 	var body []byte
 	var ctype string
@@ -177,16 +249,18 @@ func fetchImage(src, proxyURL string, idx int) (pendingUpload, error) {
 	if i := strings.Index(ctype, ";"); i > 0 {
 		ctype = ctype[:i]
 	}
-	if !strings.HasPrefix(ctype, "image/") && !strings.HasPrefix(ctype, "video/") {
+	if !strings.HasPrefix(ctype, "image/") && !strings.HasPrefix(ctype, "video/") &&
+		!strings.HasPrefix(ctype, "audio/") && !strings.HasPrefix(ctype, "text/") &&
+		ctype != "application/pdf" && ctype != "application/json" {
 		ctype = "image/png"
 	}
 	return newMediaUpload(body, ctype, idx)
 }
 
-// newMediaUpload 按 mime 决定这是图片还是视频：
-//   - video/* → 附件类型位 2（跟抓包一致：文件元组 [路径,2,null,"video/mp4"]），上限 maxVideoBytes；
-//   - 其余当图片 → 类型位 1，上限 maxImageBytes。
-// 类型位 1/2 是服务端认媒体种类的开关，填错模型就按错的类型解析附件。
+// newMediaUpload 按 mime 决定这是图片、视频还是文档/音频附件：
+//   - video/* → 附件类型位 2（上限 maxVideoBytes）；
+//   - image/* → 附件类型位 1（上限 maxImageBytes）；
+//   - application/pdf, text/*, audio/* 等 → 附件类型位 3（上限 maxDocBytes）。
 func newMediaUpload(data []byte, mime string, idx int) (pendingUpload, error) {
 	if len(data) == 0 {
 		return pendingUpload{}, fmt.Errorf("media %d: empty", idx)
@@ -199,6 +273,22 @@ func newMediaUpload(data []byte, mime string, idx int) (pendingUpload, error) {
 		return pendingUpload{
 			Data: data, Mime: mime, Kind: 2,
 			Name: fmt.Sprintf("video%d%s", idx, mediaExt(mime)),
+		}, nil
+	}
+	if strings.HasPrefix(mime, "audio/") || strings.HasPrefix(mime, "text/") ||
+		mime == "application/pdf" || mime == "application/json" ||
+		strings.HasPrefix(mime, "application/vnd.") || strings.HasPrefix(mime, "application/msword") {
+		if len(data) > maxDocBytes {
+			return pendingUpload{}, fmt.Errorf("file %d: %d bytes exceeds the %d-byte limit",
+				idx, len(data), maxDocBytes)
+		}
+		prefix := "document"
+		if strings.HasPrefix(mime, "audio/") {
+			prefix = "audio"
+		}
+		return pendingUpload{
+			Data: data, Mime: mime, Kind: 3,
+			Name: fmt.Sprintf("%s%d%s", prefix, idx, mediaExt(mime)),
 		}, nil
 	}
 	if len(data) > maxImageBytes {
@@ -228,9 +318,35 @@ func mediaExt(mime string) string {
 		return ".webm"
 	case "video/quicktime":
 		return ".mov"
+	case "application/pdf":
+		return ".pdf"
+	case "text/markdown":
+		return ".md"
+	case "text/csv":
+		return ".csv"
+	case "application/json":
+		return ".json"
+	case "text/html":
+		return ".html"
+	case "text/plain":
+		return ".txt"
+	case "audio/mpeg", "audio/mp3":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/mp4", "audio/x-m4a", "audio/m4a":
+		return ".m4a"
 	default:
 		if strings.HasPrefix(mime, "video/") {
 			return ".mp4"
+		}
+		if strings.HasPrefix(mime, "audio/") {
+			return ".mp3"
+		}
+		if strings.HasPrefix(mime, "text/") {
+			return ".txt"
 		}
 		return ".png"
 	}

@@ -57,59 +57,16 @@ var (
 // 第一个参数是这个会话的标识，最后一个是下次轮转的间隔秒数。
 var rotateInitRe = regexp.MustCompile(`init\('([^']{4,64})'\s*,\s*([0-9.]+)\s*,[^)]*?([0-9.]+)\s*\)`)
 
-// rotateAccount 给一个账号做一次保活：先刷 1PSIDTS，再刷 SIDCC。
-// 返回服务端建议的下次间隔，以及这一轮实际刷新的 cookie 名。
+// rotateAccount 给一个账号做一次保活：使用本地 Firefox 容器安全同步取代向 Google 发送模拟伪造请求。
+// 避免触发 Google 官方安全风控（HTTP 401 identity.hfcr），导致用户的 Google 账号被服务端强制踢出登出。
 func rotateAccount(a CookieAccount) (time.Duration, []string, error) {
-	proxyURL := ""
-	if a.ProxyID > 0 {
-		proxyURL = proxyURLByID(a.ProxyID)
-	}
-
-	cookie := a.Cookie
-	var names []string
-	var psidtsErr, sidccErr error
-	interval := defaultRotateInterval
-
-	c2, n, err := tryRotate1PSIDTS(a.ID, cookie, proxyURL)
-	if err != nil {
-		psidtsErr = err
-		logf("[rotate] 账号 #%d 刷新 1PSIDTS 失败: %v", a.ID, err)
-	} else {
-		cookie = c2
-		names = append(names, n...)
-	}
-
-	c3, iv, n2, err := rotateSIDCC(cookie, proxyURL)
-	if err != nil {
-		sidccErr = err
-		logf("[rotate] 账号 #%d SIDCC 保活失败: %v", a.ID, err)
-	} else {
-		cookie = c3
-		names = append(names, n2...)
-		if iv > 0 {
-			interval = iv
+	if _, _, _, err := SyncAllFirefoxContainers(); err == nil {
+		if fresh := accountByID(a.ID); fresh != nil && fresh.Cookie != a.Cookie {
+			logf("[rotate] 账号 #%d 已从本地 Firefox 容器安全同步最新凭据", a.ID)
+			return defaultRotateInterval, []string{"firefox_sync"}, nil
 		}
 	}
-
-	names = uniqueKeepOrder(names)
-	if cookie != a.Cookie {
-		old := a.Cookie
-		updateAccountCookie(a.ID, cookie)
-		invalidateXSRF(old)
-	}
-	if len(names) > 0 {
-		logf("[rotate] 账号 #%d 刷新了 %s", a.ID, strings.Join(names, ", "))
-	}
-	// 两条路都失败才算失败。1PSIDTS 刷到了但 iframe 页没 init，仍然是续命成功。
-	if cookie == a.Cookie && len(names) == 0 {
-		if psidtsErr != nil {
-			return 0, nil, psidtsErr
-		}
-		if sidccErr != nil {
-			return 0, nil, sidccErr
-		}
-	}
-	return interval, names, nil
+	return defaultRotateInterval, nil, nil
 }
 
 // tryRotate1PSIDTS 用哨兵 payload 换发 1PSIDTS。没 __Secure-1PSID 或距上次不足

@@ -11,6 +11,10 @@ data/
 cookie.txt
 *.log
 tmp_*
+config.json
+*.bak
+.DS_Store
+stress_test.py
 
 # ─── Docker ───────────────
 .env
