@@ -1,51 +1,75 @@
-# Gemini Web2API ゲートウェイ (Go 言語版)
+# Gemini Free API (Go 言語オープンソース版)
 
-> 高性能でプライベート環境にデプロイ可能なリバースプロキシゲートウェイ。Google Gemini Web を OpenAI 完全互換の `/v1/chat/completions` ストリーミング API に変換します。Google 課金 API キーは不要であり、アカウント単位の厳格な並行分離排他制御により強制ログアウトを根本から防止し、高密度リアルタイム監視ダッシュボードを内蔵しています。
+> 無料でプライベート環境にデプロイ可能な Google Gemini to OpenAI `/v1/chat/completions` リバースプロキシゲートウェイ。Google 課金 API キーやクレジットカード登録は一切不要です。Gemini 3.8 Flash、思考プロセス (reasoning_content) のリアルタイムストリーミング、マルチモーダル入力、最大 50,000 Token の長文ドキュメントパイプライン、およびゼロログアウト分離による複数アカウントプールをネイティブサポートします。
 
 [English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md) | [簡體中文](README_CN.md)
 
 ---
 
-## 1. システムアーキテクチャ
+## 1. コア機能と特徴
+
+* **完全無料かつ API キー不要**: Google Cloud の課金体系を回避し、Web 版リバースプロキシを通じて Gemini の能力を直接活用可能。
+* **OpenAI API 完全互換**: One-API、New-API、NextChat、LobeChat、Cherry Studio、Dify、Obsidian などの主要クライアントと即座に連携。
+* **思考プロセスのリアルタイムストリーミング**: `gemini-3.8-flash-thinking` および `gemini-3.1-pro` の `delta.reasoning_content` を分離して配信。
+* **50,000 Token 長文ドキュメントパイプライン**: 長文プロンプトを Google ネイティブのテキストファイル添付として自動送信し、100% 欠損なしで処理。
+* **複数アカウントプールと強制ログアウト防止**: Firefox Multi-Account Containers による物理コンテナ分離でセッションの競合を根絶。
+* **厳格なアカウント単位の並行排他制御**: 単一 Google アカウントへ同時に 2 つ以上の並行リクエストが流れるのを防ぐ排他ロック機構。
+* **高度なブラウザ指紋偽装**: Chrome 146 TLS および JA4 ハンドシェイク署名偽装を内蔵 (`bogdanfinn/tls-client`)。
+* **単一バイナリ内蔵管理画面**: 外部 CDN への依存ゼロで、レイテンシ分析、アカウント管理、使用状況確認が可能。
+
+---
+
+## 2. コンテキストウィンドウと Token 容量仕様
+
+| 処理ステージ | 入力バイト閾値 | 推定入力 Token 数 | 実行メカニズム | 応答特性 |
+| :--- | :--- | :--- | :--- | :--- |
+| **第 1 階層：標準プロンプト** | < 30,000 バイト | 約 1 〜 8,000 Token | 余分な空白の最適化を伴うインラインプロンプト実行 | 即時応答、最小遅延 |
+| **第 2 階層：ドキュメント添付** | 30,000 〜 155,000 バイト | 約 8,000 〜 50,000 Token | Google ネイティブの `message.txt` 添付ファイルとして自動マウント | 切り捨てゼロ、100% 完全取り込み |
+| **第 3 階層：上限保護** | > 155,000 バイト | > 50,000 Token | HTTP 400 (`context_length_exceeded`) を即時返却 | ボット検知およびアカウント規制を未然に防止 |
+| **生成出力制限** | 1 リクエストあたり | 最大 8,192 出力 Token | OpenAI SSE ストリーム配信、思考プロセスの分離出力 | `reasoning_content` 完全対応 |
+
+---
+
+## 3. システムアーキテクチャ
 
 ```
-[クライアントアプリケーション]
-(Python / TypeScript / Go / Rust / cURL / Obsidian)
-                      |
-                      v  HTTP POST /v1/chat/completions
-+------------------------------------------------------------------------+
-|                    Gemini Web2API ゲートウェイコア                     |
-|                                                                        |
-|  [イングレスおよび認証層]                                              |
-|    - Bearer Token 検証および権限インターセプト                         |
-|    - OpenAI データ仕様検証とロール正規化                               |
-|                                                                        |
-|  [長文コンテキスト前処理パイプライン]                                  |
-|    - 可逆的空白文字圧縮および Tool 定義軽量化                          |
-|    - ネイティブコンテキストファイル添付パイプライン (<155 KB)           |
-|                                                                        |
-|  [トラフィック制御およびスケジューラ]                                  |
-|    - IP 出口スロット制限 (デフォルト並行 5、80 RPH 規制防止境界)        |
-|    - アカウント排他排他ガード (厳格な 1 対 1 分離で強制ログアウト防止)  |
-|                                                                        |
-|  [アップストリーム通信エンジン]                                        |
-|    - Chrome TLS / JA4 ハンドシェイク偽装 (bogdanfinn/tls-client)       |
-|    - Google Web フロントエンド bl ビルドバージョンの動的追従           |
-|    - SSE ストリームパーサーおよび reasoning_content 思考プロセスの抽出 |
-+------------------------------------------------------------------------+
-            |                                           |
-            v ホスト直接接続                            v 出口プロキシメッシュ
-+-------------------------------+           +-------------------------------+
-| ホストネットワーク NIC        |           | プロキシノードプール          |
-| 単一 IP (80 RPH 安全境界)     |           | マルチ IP ラウンドロビン      |
-+-------------------------------+           +-------------------------------+
-            \                                           /
-             \                                         /
-              v                                       v
+[クライアントエコシステム]
+(Python / TypeScript / Go / Rust / cURL / One-API / NextChat / Obsidian)
+                       |
+                       v  HTTP POST /v1/chat/completions
++-------------------------------------------------------------------------+
+|                       Gemini Free API ゲートウェイ                      |
+|                                                                         |
+|  [イングレスおよび認証層]                                               |
+|    - Bearer Token 検証および権限インターセプト                          |
+|    - OpenAI データ仕様検証とロール正規化                                |
+|                                                                         |
+|  [長文コンテキストエンジン (最大 50,000 Token)]                         |
+|    - 可逆的空白文字圧縮および不要構造の除去                             |
+|    - ネイティブ Context ファイル添付 (<155 KB / ~50,000 Token)          |
+|                                                                         |
+|  [トラフィック制御およびセッションガード]                               |
+|    - IP 出口スロット制限 (デフォルト並行 5、80 RPH 安全境界)            |
+|    - アカウント排他排他ガード (厳格な 1 対 1 分離で強制ログアウト防止)   |
+|                                                                         |
+|  [アップストリーム通信エンジン]                                         |
+|    - Chrome TLS / JA4 ハンドシェイク偽装 (bogdanfinn/tls-client)        |
+|    - Google Web フロントエンド bl ビルドバージョンの動的追従            |
+|    - SSE ストリームパーサーおよび reasoning_content 思考プロセスの抽出  |
++-------------------------------------------------------------------------+
+             |                                           |
+             v ホスト直接接続                            v 出口プロキシメッシュ
++--------------------------------+          +--------------------------------+
+| ホストネットワーク NIC         |          | プロキシノードプール           |
+| 単一 IP (80 RPH 安全境界)      |          | マルチ IP ラウンドロビン       |
++--------------------------------+          +--------------------------------+
+             \                                           /
+              \                                         /
+               v                                       v
          [Google Gemini Web バックエンド (StreamGenerate プロトコル)]
 ```
 
-### 1.1 リクエストライフサイクルとスケジューリング
+### 3.1 リクエストライフサイクルと並行排他制御
 
 ```mermaid
 flowchart TD
@@ -54,9 +78,9 @@ flowchart TD
     Auth -- 成功 --> Ingest[OpenAI 履歴メッセージの正規化]
     
     Ingest --> LengthCheck{Prompt バイト長チェック}
-    LengthCheck -- "< 30 KB" --> InflightSlot[IP 出口並行スロット取得]
-    LengthCheck -- "30 KB - 155 KB" --> MakeDoc[ネイティブ添付ファイルに変換] --> InflightSlot
-    LengthCheck -- "> 155 KB" --> E400[HTTP 400 Context Length Exceeded 返却]
+    LengthCheck -- "< 30 KB (~8k Token)" --> InflightSlot[IP 出口並行スロット取得]
+    LengthCheck -- "30 KB - 155 KB (~50k Token)" --> MakeDoc[ネイティブ添付ファイルに変換] --> InflightSlot
+    LengthCheck -- "> 155 KB (>50k Token)" --> E400[HTTP 400 Context Length Exceeded 返却]
     
     InflightSlot -- IP スロット満杯 --> E429IP[HTTP 429 レート制限返却]
     InflightSlot -- スロット取得成功 --> AcctSelect[現在実行中のない空きアカウントを選択]
@@ -72,13 +96,11 @@ flowchart TD
     RelSlot --> ClientEnd[クライアントストリーミング完了]
 ```
 
-### 1.2 アカウント分離とゼロログアウト同期設計
-
-従来のリバースプロキシでは、並行アクセスや定期的なトークンリフレッシュ時に、バックエンドから Google へ直接 `RotateCookies` をリクエストすることにより、ブラウザ側トークンがリプレイ攻撃と判定され、Google サーバーによってセッションが強制切断される問題が頻発していました。本システムはアーキテクチャの根幹でこの課題を解決しています：
+### 3.2 ゼロログアウトアカウント分離モデル
 
 ```mermaid
 flowchart LR
-    subgraph Firefox コンテナ環境
+    subgraph Firefox マルチコンテナ環境
         C1[コンテナ 1: アカウント A]
         C2[コンテナ 2: アカウント B]
         C3[コンテナ 3: アカウント C]
@@ -88,7 +110,7 @@ flowchart LR
         SQLite[(Firefox cookies.sqlite)]
     end
 
-    subgraph ゲートウェイ常駐プロセス
+    subgraph ゲートウェイコア
         Poller[バックグラウンド読取ポーラー]
         Pool[(メモリ内アカウントプール)]
         InflightLock[アカウント単位の厳格な 1 対 1 排他ロック]
@@ -104,27 +126,52 @@ flowchart LR
     InflightLock -->|同一アカウントへ同時に 2 接続以上流さない| Upstream[Google Gemini Web]
 ```
 
-* **自発的 RotateCookies の全面廃止**: バックエンドから Google へ模擬的なトークン再発行リクエストを発行しないため、セッション衝突を完全に回避します。
-* **アカウント単位の厳格な単一並行制限**: 1 つの Google アカウントにつき、同一瞬間に処理できるストリーミングリクエストを 1 件に制限。並行リクエストは他の空きアカウントへ均等分散されるかキュー待機され、セッション破棄を根絶します。
+---
+
+## 4. クイックスタート
+
+### 4.1 単一バイナリによる直接起動 (推奨)
+
+```bash
+# 1. バイナリのビルド
+go build -o gemini-free-api main.go
+
+# 2. サーバーの起動 (ポートおよび管理トークンを指定)
+./gemini-free-api --port 8083 --admin-token YOUR-ADMIN-PASSWORD
+```
+
+ブラウザで `http://localhost:8083/admin/` にアクセスして内蔵管理ダッシュボードを開きます。
+
+### 4.2 Docker コンテナによる実行
+
+```bash
+docker run -d \
+  --name gemini-free-api \
+  -p 8083:8083 \
+  -v $(pwd)/data:/app/data \
+  -e ADMIN_TOKEN=YOUR-ADMIN-PASSWORD \
+  --restart unless-stopped \
+  zexadev/gemini-web2api-go:latest
+```
 
 ---
 
-## 2. コアアーキテクチャ構成要素
+## 5. 主要サードパーティクライアント接続設定
 
-| コンポーネント | 主な責務 | 障害復旧および保護メカニズム |
-| :--- | :--- | :--- |
-| **イングレスエンジン (Ingress Engine)** | OpenAI `/v1/chat/completions`、`/v1/models` エンドポイントの提供。 | 標準的な JSON エラー (`invalid_request_error`、`rate_limit_exceeded`) を返却。 |
-| **アカウントプールマネージャー (Account Fleet)** | SQLite を基盤としたアカウント資格情報、使用制限、プロキシ設定の管理。 | 3 回連続認証失敗時に自動的にアカウントを一時停止し、全体の遅延を防止。 |
-| **単一アカウント排他ガード (In-Flight Guard)** | アカウントごとの同時実行数を厳格に 1 に制限。 | 同時リクエスト時に最大 6 秒間キューイング、または他の空きアカウントへ分散。 |
-| **IP スロットリミッター (IP Slot Limiter)** | 出口 IP ごとの同時接続数、RPM、RPH を厳密に制御。 | Google WAF の規制閾値に近づいた際、安全に拒絶または別プロキシへ退避。 |
-| **長文コンテキスト前処理部** | 余分な空白の圧縮および長文テキストのファイル添付化。 | 155 KB の上限を超える場合は HTTP 400 を返し、Google 側のアカウント制裁を回避。 |
-| **テレメトリ UI (Telemetry UI)** | 内蔵管理画面と Chart.js によるレイテンシ可視化。 | 単一バイナリに 100% 埋め込み、外部 CDN や外部ネットワークへの依存ゼロ。 |
+| アプリケーション | カスタム API エンドポイント (Base URL) | API Key | 推奨モデル名 |
+| :--- | :--- | :--- | :--- |
+| **One-API / New-API** | `http://localhost:8083` | `YOUR-ADMIN-PASSWORD` | チャンネルタイプ `OpenAI`、`gemini-3.8-flash-thinking` を指定 |
+| **NextChat / ChatGPT-Next-Web** | `http://localhost:8083/v1` | `YOUR-ADMIN-PASSWORD` | `gemini-3.8-flash` または `gemini-3.8-flash-thinking` |
+| **LobeChat** | `http://localhost:8083/v1` | `YOUR-ADMIN-PASSWORD` | カスタム OpenAI プロバイダーとして設定 |
+| **Cherry Studio** | `http://localhost:8083/v1` | `YOUR-ADMIN-PASSWORD` | OpenAI 互換プロバイダーとして設定 |
+| **Dify** | `http://localhost:8083/v1` | `YOUR-ADMIN-PASSWORD` | OpenAI-API 互換モデルプロバイダー |
+| **Obsidian (Smart Connections)** | `http://localhost:8083/v1` | `YOUR-ADMIN-PASSWORD` | `gemini-3.8-flash` |
 
 ---
 
-## 3. 対応モデル一覧表
+## 6. 対応モデル一覧表
 
-| モデル識別子 (Model ID) | バックエンド Hex コード | 思考プロセス対応 (Thinking) | マルチモーダル (画像/ファイル) | 最大出力 Token | 推奨されるユースケース |
+| モデル識別子 (Model ID) | バックエンド Hex コード | 思考プロセス対応 (Thinking) | マルチモーダル (画像/ファイル) | 出力 Token 上限 | 推奨されるユースケース |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `gemini-3.8-flash` | `56fdd199312815e2` | なし | あり | 8,192 | 低レイテンシ、高スループットな応答 |
 | `gemini-3.8-flash-thinking` | `56fdd199312815e2` | あり (`reasoning_content`) | あり | 8,192 | 高度な論理推論、推論プロセスの可視化 |
@@ -134,49 +181,7 @@ flowchart LR
 
 ---
 
-## 4. 実行時設定パラメータ一覧
-
-全パラメータは SQLite データベースに永続化され、管理ダッシュボード (`http://localhost:8083/admin/`) からサービスを再起動することなく即座に動的更新可能です。
-
-| パラメータ名 | データ型 | デフォルト値 | 推奨安全範囲 | 機能説明および安定性への影響 |
-| :--- | :--- | :--- | :--- | :--- |
-| `per_ip_concurrent` | 整数 | `5` | `1 - 10` | 1 つの出口 IP あたりの最大同時実行数。10 を超えると Google の拒絶対象となります。 |
-| `per_ip_rpm` | 整数 | `30` | `10 - 60` | 1 つの出口 IP あたりの 1 分間最大リクエスト数。 |
-| `per_ip_rph` | 整数 | `80` | `40 - 150` | 1 つの出口 IP あたりの 1 時間最大リクエスト数。Google WAF 規制線未満に保持。 |
-| `max_prompt_bytes` | 整数 | `120000` | `50000 - 150000` | 入力プロンプトの UTF-8 バイト上限。この値を超えると添付ファイル化パイプラインへ遷移。 |
-| `context_compression` | 真偽値 | `true` | `true / false` | プロンプト内の重複空白文字や無駄なフォーマットを可逆的に軽量化。 |
-| `context_file_upload` | 真偽値 | `true` | `true / false` | 30 KB - 155 KB の長文プロンプトを自動的にテキストファイル添付として送信。 |
-| `fallback_anon` | 真偽値 | `false` | `true / false` | アカウントが全てビジーの際、思考を伴わないリクエストを一時的に匿名ルートへ迂回。 |
-| `impersonate` | 文字列 | `chrome_146` | TLS プロファイル | 偽装するブラウザの TLS および JA4 署名プロファイル。 |
-| `gemini_bl_auto` | 真偽値 | `true` | `true / false` | 6 時間ごとに Google Web の最新 bl バージョンを自動取得して適用。 |
-
----
-
-## 5. 本番環境向けデプロイおよびレート調整指針
-
-高負荷耐久テストに基づく各環境の推奨パラメータは以下の通りです：
-
-| ネットワーク構成 | 有効アカウント数 | 推奨並行スロット | 安全 RPM | 安全 RPH | 運用上の注意点 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **ホスト直接接続 IP** | 1 - 5 アカウント | 3 - 5 | 15 - 25 | 60 - 80 | 個人利用や Obsidian ナレッジベース連携における推奨設定。 |
-| **単一専用プロキシ** | 1 - 3 アカウント | 3 - 4 | 15 - 20 | 60 - 75 | ホスト IP の露出を防ぎ、中規模バッチ処理に適しています。 |
-| **分散プロキシプール** | 5 - 20 アカウント | 10 - 25 | 60 - 120 | 300 - 800 | 負荷を複数のプロキシノードに分散させる高スループット構成。 |
-
----
-
-## 6. アップストリーム異常検知と自動復旧マッピング
-
-| アップストリーム検知パターン | HTTP 状態コード | 根本原因 | ゲートウェイの自動対処 |
-| :--- | :--- | :--- | :--- |
-| `no SNlM0e in page` | 401 Unauthorized | アカウントのセッション期限切れまたはログアウト | 失敗回数を加算し、プール内の別の健全なアカウントへ自動切替。 |
-| `BardErrorInfo [1095]` | 429 Too Many Requests | IP レベルの瞬間過負荷またはレート制限 | 当該 IP スロットを満杯とみなし、リクエストを一時停止または別プロキシへ退避。 |
-| `302 -> /sorry/index` | 429 Too Many Requests | Google WAF による一時的 IP 遮断 (80-120 分間継続) | プロキシノードの自動サーキットブレーカーを発動し、冷却待機へ移行。 |
-| `PromptTooLongError` | 400 Bad Request | プロンプトが 155 KB の添付安全上限を超過 | `context_length_exceeded` を返し、アカウント制裁リスクを未然に防止。 |
-| `xsrf token mismatch` | 502 Bad Gateway | キャッシュされた XSRF トークンの失効 | メモリ内キャッシュを破棄し、新しいトークンを再取得して即座に自動再試行。 |
-
----
-
-## 7. プログラミング言語別インテグレーションコード
+## 7. プログラミング言語別呼び出し例
 
 ### 7.1 Python (公式 OpenAI SDK)
 
@@ -192,8 +197,8 @@ client = OpenAI(
 stream = client.chat.completions.create(
     model="gemini-3.8-flash-thinking",
     messages=[
-        {"role": "system", "content": "You are a systems engineering advisor."},
-        {"role": "user", "content": "Explain the architectural trade-offs between stateless context replay and stateful server sessions."}
+        {"role": "system", "content": "You are a senior software architect."},
+        {"role": "user", "content": "Explain how single-turn stateless context prevents session invalidation."}
     ],
     temperature=0.2,
     stream=True
@@ -221,7 +226,7 @@ const client = new OpenAI({
 async function main() {
   const stream = await client.chat.completions.create({
     model: "gemini-3.8-flash-thinking",
-    messages: [{ role: "user", content: "Summarize the ACID properties of relational databases." }],
+    messages: [{ role: "user", content: "Summarize the ACID properties of databases." }],
     stream: true,
   });
 
@@ -255,7 +260,7 @@ func main() {
 	payload := map[string]interface{}{
 		"model": "gemini-3.8-flash",
 		"messages": []map[string]string{
-			{"role": "user", "content": "Output a verified Go concurrency worker pool implementation."},
+			{"role": "user", "content": "Write a concurrent worker pool in Go."},
 		},
 		"stream": false,
 	}
@@ -318,44 +323,37 @@ curl -X POST http://localhost:8083/v1/chat/completions \
   }'
 ```
 
-### 7.6 Obsidian (Smart Connections / Copilot)
+---
 
-1. Obsidian の設定を開き、**Smart Connections** または **Copilot** プラグインへ移動します。
-2. **Custom OpenAI API Endpoint** に `http://localhost:8083/v1` を指定します。
-3. **API Key** に `sk-gemini-master-key` (または設定した `--admin-token`) を指定します。
-4. **Model Identifier** に `gemini-3.8-flash` または `gemini-3.8-flash-thinking` を指定します。
+## 8. 推奨本番環境設定
+
+| ネットワーク構成 | 有効アカウント数 | 推奨並行スロット | 安全 RPM | 安全 RPH | 運用上の指針 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **ホスト直接接続 IP** | 1 - 5 アカウント | 3 - 5 スロット | 15 - 25 | 60 - 80 | 個人利用や Obsidian ナレッジベース連携における標準設定。 |
+| **専用プロキシ** | 1 - 3 アカウント | 3 - 4 スロット | 15 - 20 | 60 - 75 | ホスト IP の露出を防ぎ、小規模チームの自動化に適しています。 |
+| **分散プロキシプール** | 5 - 20 アカウント | 10 - 25 スロット | 60 - 120 | 300 - 800 | 負荷を複数のプロキシノードに分散させる高スループット構成。 |
 
 ---
 
-## 8. クイックスタート
+## 9. 実行時設定パラメータ一覧
 
-### 8.1 単一バイナリによる直接起動 (推奨)
+全パラメータは SQLite データベースに永続化され、管理ダッシュボード (`http://localhost:8083/admin/`) からサービスを再起動することなく即座に動的更新可能です。
 
-```bash
-# 1. バイナリのビルド
-go build -o gemini-web2api-go main.go
-
-# 2. サーバーの起動 (ポートおよび管理トークンを指定)
-./gemini-web2api-go --port 8083 --admin-token YOUR-ADMIN-PASSWORD
-```
-
-ブラウザで `http://localhost:8083/admin/` にアクセスして管理ダッシュボードを開きます。
-
-### 8.2 Docker コンテナによる実行
-
-```bash
-docker run -d \
-  --name gemini-web2api \
-  -p 8083:8083 \
-  -v $(pwd)/data:/app/data \
-  -e ADMIN_TOKEN=YOUR-ADMIN-PASSWORD \
-  --restart unless-stopped \
-  zexadev/gemini-web2api-go:latest
-```
+| パラメータ名 | データ型 | デフォルト値 | 推奨安全範囲 | 機能説明および安定性への影響 |
+| :--- | :--- | :--- | :--- | :--- |
+| `per_ip_concurrent` | 整数 | `5` | `1 - 10` | 1 つの出口 IP あたりの最大同時実行数。10 を超えると Google の拒絶対象となります。 |
+| `per_ip_rpm` | 整数 | `30` | `10 - 60` | 1 つの出口 IP あたりの 1 分間最大リクエスト数。 |
+| `per_ip_rph` | 整数 | `80` | `40 - 150` | 1 つの出口 IP あたりの 1 時間最大リクエスト数。Google WAF 規制線未満に保持。 |
+| `max_prompt_bytes` | 整数 | `120000` | `50000 - 150000` | 入力プロンプトの UTF-8 バイト上限。この値を超えると添付ファイル化パイプラインへ遷移。 |
+| `context_compression` | 真偽値 | `true` | `true / false` | プロンプト内の重複空白文字や無駄なフォーマットを可逆的に軽量化。 |
+| `context_file_upload` | 真偽値 | `true` | `true / false` | 30 KB - 155 KB (約 50,000 Token) の長文プロンプトを自動的にテキストファイル添付として送信。 |
+| `fallback_anon` | 真偽値 | `false` | `true / false` | アカウントが全てビジーの際、思考を伴わないリクエストを一時的に匿名ルートへ迂回。 |
+| `impersonate` | 文字列 | `chrome_146` | TLS プロファイル | 偽装するブラウザの TLS および JA4 署名プロファイル。 |
+| `gemini_bl_auto` | 真偽値 | `true` | `true / false` | 6 時間ごとに Google Web の最新 bl バージョンを自動取得して適用。 |
 
 ---
 
-## 9. コマンドライン引数一覧
+## 10. コマンドライン引数一覧
 
 | コマンドライン引数 | 環境変数 | デフォルト値 | 説明 |
 | :--- | :--- | :--- | :--- |
@@ -367,7 +365,7 @@ docker run -d \
 
 ---
 
-## 10. ライセンス
+## 11. ライセンス
 
 MIT ライセンスの下で配布されています。
 研究、ローカル開発、パーソナルナレッジベース構築を目的としています。Google の利用規約を遵守してご利用ください。
