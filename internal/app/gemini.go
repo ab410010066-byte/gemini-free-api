@@ -325,8 +325,18 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 	budget := rtCfg().MaxPromptBytes
 	needsLoginForAttachment := len(pending) > 0 || (budget > 0 && len(prompt) > budget)
 	if !anonFirstEligible(mc, needsLoginForAttachment) {
-		if a, ok := pickCookieAccount(); ok {
-			acct = a
+		// 挑空闲账号（单账号严格单并发，防止 Google 会话冲突导致踢下线）。
+		// 若当前所有账号都在途，短暂停留等待空闲，避免直接丢弃。
+		for waitRound := 0; waitRound < 30; waitRound++ {
+			if a, ok := pickCookieAccount(); ok {
+				acct = a
+				break
+			}
+			_, enabled := accountCount()
+			if enabled == 0 {
+				break
+			}
+			time.Sleep(150 * time.Millisecond)
 		}
 	}
 	preferProxy := int64(0)
@@ -339,6 +349,11 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 	var picked Proxy
 	var cookieID int64
 	var cookieLabel string
+	defer func() {
+		if cookieID > 0 {
+			ReleaseAccountSlot(cookieID)
+		}
+	}()
 	attrib := func(err error) (*StreamResult, error) {
 		return &StreamResult{
 			AccountID: cookieID, AccountLabel: cookieLabel,
@@ -421,6 +436,8 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		markCookieByStatus(acct.ID, 401, err.Error())
 		lastCookieErr = err
 		logf("[cookie] 账号 #%d 不可用，换下一个：%v", acct.ID, err)
+		ReleaseAccountSlot(acct.ID)
+		cookieID, cookieLabel = 0, ""
 		acct, _ = pickCookieAccountExcept(tried) // 取不到时返回 nil，循环自然结束
 	}
 	if lastCookieErr != nil && cookieStr == "" {
@@ -474,22 +491,7 @@ func streamGenerateWithFiles(prompt, latest string, mc ModelConfig, pending []pe
 		prompt = pPrompt
 	}
 	if budget > 0 && len(prompt) > budget {
-		if rtCfg().ChunkedMultiTurn && len(pending) == 0 && mc.Tool == 0 && len(prompt) <= maxChunkedPromptBytes {
-			conv := &convState{
-				cookie:       cookieStr,
-				sapisid:      sapisid,
-				isLogin:      cookieStr != "",
-				accountID:    cookieID,
-				accountLabel: cookieLabel,
-				proxyID:      picked.ID,
-				proxyURL:     proxyURL,
-			}
-			res, cerr := runChunkedOnSlot(prompt, latest, mc, conv, picked, xsrfToken, onDelta, onReasoning)
-			if cerr == nil && rtCfg().AutoDeleteConversation && cookieStr != "" && xsrfToken != "" && conv.cid != "" {
-				go deleteConversation(conv.cid, conv.cookie, conv.sapisid, xsrfToken, proxyURL)
-			}
-			return res, cerr
-		}
+		// 超过单次与附件上限，直接返回标准 400，避免使用多轮分片机器人式连续请求导致 Google 账号被风控封禁
 		return attrib(&PromptTooLongError{
 			Bytes: len(prompt), Budget: budget, HasCookie: cookieStr != "",
 		})

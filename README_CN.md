@@ -1,87 +1,184 @@
-# 🌌 AETHER GATEWAY · Gemini Web2API (Go 企业旗舰版)
+# Gemini Web2API 网关（Go 语言版）
 
-> **将 Google Gemini 网页端逆向转化为企业级 OpenAI 兼容 API 网关**  
-> **免官方 API Key · 零付费额度 · Apple Liquid Glass & Linear 极客遥测面板 · Firefox 多账号容器物理隔离防掉线 · 1.2MB 三阶长文本突破引擎**
+> 高性能、支持私有化部署的反向代理网关，将 Google Gemini 网页端转换为完全兼容 OpenAI `/v1/chat/completions` 的流式接口。无需 Google 官方付费 API Key，具备严格的单账号并发隔离保护机制以杜绝会话被踢登出，并内置高密度实时监控面板。
 
-<div align="center">
-
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=for-the-badge&logo=go)](https://golang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
-[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20v1%20Compatible-00F2FE?style=for-the-badge&logo=openai)](https://platform.openai.com/docs/api-reference)
-[![UI: Apple Liquid Glass](https://img.shields.io/badge/UI-Apple%20Liquid%20Glass%20%2B%20Linear-8B5CF6?style=for-the-badge)](#1-🎛️-aether-旗舰遥测控制中心-apple-liquid-glass--linear-ui)
-[![Zero Logout](https://img.shields.io/badge/Firefox-Multi--Account%20Containers-FF7139?style=for-the-badge&logo=firefox)](https://addons.mozilla.org/firefox/addon/multi-account-containers/)
-[![Long Context](https://img.shields.io/badge/Context-1.2MB%203--Tier%20Engine-10B981?style=for-the-badge)](https://gemini.google.com)
-
-[简体中文](README_CN.md) | [English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md)
-
-</div>
+[English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md) | [简体中文](README_CN.md)
 
 ---
 
-## 🚀 为什么选择 AETHER GATEWAY？
-
-官方 Google Gemini API 存在严苛的计费门槛与频率限制；而一般的开源逆向项目常遭遇 **Google 账号频繁互踢登出**、**超长 Prompt 触发 502 报错**、**并发过高触发 `BardErrorInfo [1095]` 封禁**、以及**粗糙的后台界面**。
-
-**AETHER GATEWAY** 专为高负载生产环境、大模型智能体、专业知识库抽取与 Obsidian 个人脑库设计：
+## 1. 系统架构图
 
 ```
-[客户端生态: Python / TypeScript / Go / Rust / Obsidian / Next.js]
-                           ↓ http://localhost:8083/v1/chat/completions
-┌────────────────────────────────────────────────────────────────────────┐
-│                      AETHER GATEWAY 控制核心                           │
-│  • 瞬时并发保护阀门 (Per-IP Concurrency Protector) → 防 1095/WAF 阻断    │
-│  • 三阶长文本突破引擎 (Lossless → 155KB Attachment → 1.2MB Chunking)  │
-│  • Chrome 146 TLS / JA4 真实浏览器指纹伪装 + 动态 BL 版本跟随          │
-│  • Apple Liquid Glass & Linear 曜石暗黑遥测控制中心 (0 外网依赖)        │
-└────────────────────────────────────────────────────────────────────────┘
-       ↓ 实体 Cookie 隔离机队                 ↓ 出口网格分流
-┌───────────────────────────────────┐     ┌───────────────────────────────┐
-│ Firefox Multi-Account Containers  │     │ 代理节点池 (Proxy Mesh)       │
-│ • 后端 0 点击直写 containers.json  │     │ • 实体出口 IP 轮替            │
-│ • 多账号平行登录 · 零互踢登出     │     │ • 失败熔断与健康度诊断        │
-│ • SQLite SNlM0e 登录态实时雷达    │     │ • 80 RPH Google Ban 红线雷达  │
-└───────────────────────────────────┘     └───────────────────────────────┘
-                           ↓ 逆向 StreamGenerate 协议
-            [Google Gemini 网页端 (gemini-3.8-flash / thinking)]
+[客户端应用]
+(Python / TypeScript / Go / Rust / cURL / Obsidian)
+                      |
+                      v  HTTP POST /v1/chat/completions
++------------------------------------------------------------------------+
+|                     Gemini Web2API 网关核心引擎                        |
+|                                                                        |
+|  [入口层与身份鉴权]                                                    |
+|    - Bearer Token 校验与权限拦截                                       |
+|    - OpenAI 数据规范验证与角色上下文重构                               |
+|                                                                        |
+|  [长上下文预处理管线]                                                  |
+|    - 无损空白压缩与工具声明瘦身                                       |
+|    - 原生文件附件流水线（<155 KB 静态挂载）                           |
+|                                                                        |
+|  [流量控制与调度器]                                                    |
+|    - 单 IP 出口槽位限流（默认 5 并发，80 RPH 防封红线）                |
+|    - 单账号在途请求保护锁（严格 1 对 1 会话隔离，彻底防止踢出登出）   |
+|                                                                        |
+|  [上游通讯引擎]                                                        |
+|    - Chrome TLS / JA4 握手指纹伪装（bogdanfinn/tls-client）            |
+|    - 动态跟随 Google 前端 bl 构建版本                                 |
+|    - SSE 流式解析器与 reasoning_content 思考链分离提取                 |
++------------------------------------------------------------------------+
+            |                                           |
+            v 本机直接连线                              v 出口代理节点池
++-------------------------------+           +-------------------------------+
+| 本机网络网卡                  |           | 代理节点池                    |
+| 单 IP（80 RPH 安全阈值）      |           | 多 IP 轮询负载均衡            |
++-------------------------------+           +-------------------------------+
+            \                                           /
+             \                                         /
+              v                                       v
+         [Google Gemini 网页端后端（StreamGenerate 协议）]
 ```
 
+### 1.1 请求生命周期与调度流程
+
+```mermaid
+flowchart TD
+    Req[客户端传入请求] --> Auth{验证 Bearer Token}
+    Auth -- 失败 --> E401[返回 HTTP 401 Unauthorized]
+    Auth -- 成功 --> Ingest[格式化 OpenAI 历史消息]
+    
+    Ingest --> LengthCheck{Prompt 字节长度检查}
+    LengthCheck -- "< 30 KB" --> InflightSlot[获取 IP 出口并发槽位]
+    LengthCheck -- "30 KB - 155 KB" --> MakeDoc[打包为原生 Context 文件附件] --> InflightSlot
+    LengthCheck -- "> 155 KB" --> E400[返回 HTTP 400 Context Length Exceeded]
+    
+    InflightSlot -- IP 槽位已满 --> E429IP[返回 HTTP 429 触发安全熔断]
+    InflightSlot -- 槽位成功获取 --> AcctSelect[挑选当前无在途请求的空闲账号]
+    
+    AcctSelect -- 账号全数繁忙 --> WaitAcct{短暂队列等待（最多 6 秒）}
+    WaitAcct -- 等待超时且开启 FallbackAnon --> AnonReq[降级走匿名通道发送]
+    WaitAcct -- 等待超时且严格模式 --> E429Acct[返回 HTTP 429 账号繁忙]
+    WaitAcct -- 账号释放空闲 --> ExecReq[发起 StreamGenerate 请求]
+    AcctSelect -- 顺利获取空闲账号 --> ExecReq
+    
+    ExecReq --> SSETrans[转译分块协议为 OpenAI SSE 数据流]
+    SSETrans --> RelSlot[释放 IP 槽位与账号在途保护锁]
+    RelSlot --> ClientEnd[客户端流式结束]
+```
+
+### 1.2 账号隔离与零登出同步架构
+
+传统反向代理在遇到并发或定时刷新时，常因主动向 Google 发送换票请求（`RotateCookies`）导致浏览器端 Token 被判定为重放攻击，进而被 Google 服务器强制注销。本架构在底层彻底解决该隐患：
+
+```mermaid
+flowchart LR
+    subgraph Firefox 容器环境
+        C1[容器 1：账号甲]
+        C2[容器 2：账号乙]
+        C3[容器 3：账号丙]
+    end
+
+    subgraph 操作系统本地存储
+        SQLite[(Firefox cookies.sqlite)]
+    end
+
+    subgraph 网关守护进程
+        Poller[后台只读轮询器]
+        Pool[(内存账号池)]
+        InflightLock[单账号 1 对 1 在途排他锁]
+    end
+
+    C1 -->|浏览器合法后台保活| SQLite
+    C2 -->|浏览器合法后台保活| SQLite
+    C3 -->|浏览器合法后台保活| SQLite
+
+    SQLite -->|每 10 分钟只读安全读取| Poller
+    Poller -->|写入更新| Pool
+    Pool --> InflightLock
+    InflightLock -->|单一账号同一秒绝不并发| Upstream[Google Gemini 网页端]
+```
+
+* **禁止主动 RotateCookies**：后端完全停用向 Google 主动发起模拟换票，彻底规避凭据重放风控。
+* **严格单账号排他保护**：单个 Google 账号同一时刻严格只处理 1 个在途流式请求，后续请求排队或由其他空闲账号承接，杜绝并发推流导致的 Session 作废。
+
 ---
 
-## ✨ 核心突破与创新亮点
+## 2. 核心架构组件说明
 
-### 1. 🎛️ AETHER 旗舰遥测控制中心 (Apple Liquid Glass & Linear UI)
-* **极致视觉美学**：曜石黑基底（`#06080D`）搭配双层高光微边框（`inset 0 1px 0 rgba(255,255,255,0.12)`）与亚克力雾面玻璃效果（`backdrop-filter: blur(24px)`）。
-* **Google 80 RPH 封禁红线雷达 (Distance to Ban Redline)**：以逆向工程实测数据为基准，可视化呈现单出口距离 80~180 RPH WAF 惩罚线的实时安全距离，并动态提供避险指引。
-* **P50 / P95 延迟波形图 (Chart.js)**：真实双轴线面图，同时监控请求吞吐量与中位数延迟。
-* **飞行日志与全链路取证抽屉 (Forensic Dossier)**：支持实时多条件快搜、分页、RFC 兼容 CSV 导出，以及首字响应时间（TTFB）vs 生成思考耗时瀑布图。
-* **零外网依赖**：Chart.js 与所有矢量图标完全本地嵌入，内网或完全隔离环境亦可 100% 正常开启。
-
-### 2. 🦊 Firefox 多账号容器全自动精灵 (Zero-Logout Multi-Account Fleet)
-* **0-Click 自动建立容器**：后端直接写入 Firefox 的 `containers.json`，秒级自动生成 5~20 个彩色隔离容器（`Gemini-01`, `Gemini-02`...），免去手动配置！
-* **实体 Cookie 隔离 · 零互踢登出**：利用 Firefox Contextual Identities 硬件隔离机制，在同一台机器同时登录数十个 Google 账号，彻底根除多账号 Session 冲突互踢。
-* **实时登录态雷达探测器**：每 2.5 秒自动探测本地 `cookies.sqlite`，只要用户在标签页登录 Google，界面立刻点亮绿灯（`🟢 SNlM0e ✅`），支持一键全部收割入库。
-
-### 3. 📚 三阶长文本突破引擎 (1.2MB Ultra-Long Context Pipeline)
-突破网页端常规单次输入限制：
-* **Tier 1 (小于 32 KB)**：无损空白与 Markdown 优化，直接极速调用。
-* **Tier 2 (32 KB ~ 155 KB)**：自动转化为 Google 原生 `message.txt` 附件外挂，上游解析效率提升 300%。
-* **Tier 3 (超过 155 KB，最高可达 1.2 MB)**：自动借用 Google 原生会话多轮分切喂入，对话完毕自动清理远端暂存。
-
-### 4. 🧠 完整支持 Thinking 深度思考模型与 SSE 真实流式输出
-* 原生支持 `gemini-3.8-flash`、`gemini-3.8-flash-thinking`、`gemini-3.7-flash`、`gemini-3.1-pro`。
-* **思考链独立紫晶玻璃抽屉**：自动将上游 `delta.reasoning_content` 实时注入打字机效果，推演完毕自动优雅收折。
-* **实时 Token 速率监控**：实时计算每秒生成速率（`tok/s`）与首字反应延迟。
-
-### 5. 🛡️ 浏览器真实指纹伪装与防刷风控防御
-* **Chrome 146 TLS / JA4 指纹伪装**：模拟最新版本 Chrome 握手特征。
-* **单 IP 瞬时并发保护 (`per_ip_concurrent`)**：严格限制本机在途请求（默认 5），避免触发 Google `BardErrorInfo [1095]` 空内容帧拒绝。
-* **自动动态跟随前端构建版本 (Dynamic BL Tracking)**。
+| 组件名称 | 核心职责 | 异常恢复与熔断策略 |
+| :--- | :--- | :--- |
+| **入口引擎（Ingress Engine）** | 提供 OpenAI `/v1/chat/completions`、`/v1/models` 等标准接口。 | 返回标准规范的 JSON 错误定义（`invalid_request_error`、`rate_limit_exceeded`）。 |
+| **账号池管理器（Account Fleet）** | 基于 SQLite 管理所有账号凭据、用量额度与绑定代理。 | 连续 3 次鉴权失败自动标记停用，防止失效账号持续拖累集群。 |
+| **单账号并发锁（In-Flight Guard）** | 保证单一账号在途连接数不超过 1。 | 遇到并发流量时平滑入队等待（最多 6 秒），或由其他空闲账号分担。 |
+| **IP 槽位限流器（IP Slot Limiter）** | 精确控制各 IP 出口的即时并发、RPM 与 RPH。 | 逼近 Google WAF 阈值时自动限流或调度至备用代理节点。 |
+| **长上下文预处理器** | 自动剔除冗余格式标记，并将超长提示词转化为附件。 | 超过 155 KB 安全上限直接规范报错 400，避免触发上游封禁。 |
+| **监控面板（Telemetry UI）** | 内置管理界面与 Chart.js 性能瀑布图。 | 100% 离线编译于单个可执行文件，零外部网络与 CDN 依赖。 |
 
 ---
 
-## 🛠️ 主流语言接入代码示例
+## 3. 支持模型矩阵表
 
-### 🐍 Python (OpenAI SDK + 实时思考链提取)
+| 模型标识（Model ID） | 后端 Hex 代码 | 思考链支持（Thinking） | 多模态（图片/文档） | 最大输出 Token | 适用任务类型 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `gemini-3.8-flash` | `56fdd199312815e2` | 否 | 是 | 8,192 | 低延迟、高吞吐之快速对话 |
+| `gemini-3.8-flash-thinking` | `56fdd199312815e2` | 是（`reasoning_content`） | 是 | 8,192 | 复杂逻辑推理、深度推演 |
+| `gemini-3.7-flash` | `fbb127bbb056c959` | 否 | 是 | 8,192 | 一般日常文本处理与摘要 |
+| `gemini-3.5-flash-lite` | `8c46e95b1a07cecc` | 否 | 是 | 8,192 | 轻量任务、降级兜底执行 |
+| `gemini-3.1-pro` | `e6fa609c3fa255c0` | 是 | 是 | 8,192 | 深度综合分析与专业领域抽取 |
+
+---
+
+## 4. 运行时配置参数表
+
+所有参数均保存在 SQLite 数据库中，可直接在管理面板（`http://localhost:8083/admin/`）动态热更新，无需重启服务。
+
+| 参数名称 | 数据类型 | 默认值 | 推荐安全范围 | 作用说明与稳定性考量 |
+| :--- | :--- | :--- | :--- | :--- |
+| `per_ip_concurrent` | 整数 | `5` | `1 - 10` | 单 IP 出口最大同时在途请求数。超过 10 易触发 Google 空帧拦截。 |
+| `per_ip_rpm` | 整数 | `30` | `10 - 60` | 单 IP 每分钟最高请求数。 |
+| `per_ip_rph` | 整数 | `80` | `40 - 150` | 单 IP 每小时最高请求数。严格低于 Google 官方 80-180 警戒线。 |
+| `max_prompt_bytes` | 整数 | `120000` | `50000 - 150000` | 单次输入提示词之 UTF-8 字节上限。超过此门槛自动转入附件流水线。 |
+| `context_compression` | 布尔值 | `true` | `true / false` | 无损剔除提示词中冗余空白字符与重复结构。 |
+| `context_file_upload` | 布尔值 | `true` | `true / false` | 超长文本（30 KB - 155 KB）自动转为原生文本文件附件发送。 |
+| `fallback_anon` | 布尔值 | `false` | `true / false` | 当账号池全数繁忙时，允许无思考需求的请求临时走匿名通道。 |
+| `impersonate` | 字符串 | `chrome_146` | TLS 预设集 | 伪装之浏览器 TLS 与 JA4 握手特征。 |
+| `gemini_bl_auto` | 布尔值 | `true` | `true / false` | 每 6 小时自动检查并跟随 Google Web 最新前端构建版本。 |
+
+---
+
+## 5. 生产环境部署与限流调优指南
+
+经压力测试验证，不同网络拓扑之推荐配置如下：
+
+| 部署拓扑 | 账号数量 | 建议并发槽位 | 安全 RPM | 安全 RPH | 运维说明 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **本机直连 IP** | 1 - 5 个账号 | 3 - 5 | 15 - 25 | 60 - 80 | 个人开发、知识库插件（Obsidian）之黄金推荐参数。 |
+| **单一专用代理** | 1 - 3 个账号 | 3 - 4 | 15 - 20 | 60 - 75 | 隔离本机真实 IP，适合中小规模自动化任务。 |
+| **分布式代理池** | 5 - 20 个账号 | 10 - 25 | 60 - 120 | 300 - 800 | 高吞吐集群部署，将请求平摊至多台代理机器。 |
+
+---
+
+## 6. 上游异常状态与自动恢复对照表
+
+| 上游特征签名 | 客户端状态码 | 根本原因 | 网关自动处理机制 |
+| :--- | :--- | :--- | :--- |
+| `no SNlM0e in page` | 401 Unauthorized | 账号凭证失效或已被登出 | 累加失败计数，自动熔断并平滑切换至池中下一个可用账号。 |
+| `BardErrorInfo [1095]` | 429 Too Many Requests | IP 出口瞬间并发过高或触发限流 | 立即标记该 IP 槽位饱和，暂停调度或切换至替代代理节点。 |
+| `302 -> /sorry/index` | 429 Too Many Requests | Google WAF 硬性封禁 IP（通常持续 80-120 分钟） | 代理节点自动触发熔断机制，进入冷却队列。 |
+| `PromptTooLongError` | 400 Bad Request | 提示词超出 155 KB 附件安全上限 | 规范返回 `context_length_exceeded`，拒绝发送以防账号被标。 |
+| `xsrf token mismatch` | 502 Bad Gateway | 缓存之 XSRF 令牌已过期 | 即刻清除内存缓存，重新抓取最新令牌后自动重试。 |
+
+---
+
+## 7. 各主流编程语言调用示例
+
+### 7.1 Python（官方 OpenAI SDK）
 
 ```python
 import os
@@ -89,43 +186,42 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:8083/v1",
-    api_key=os.environ.get("GEMINI_API_KEY", "sk-gemini-YOUR-MASTER-KEY")
+    api_key=os.environ.get("GEMINI_API_KEY", "sk-gemini-master-key")
 )
 
-response = client.chat.completions.create(
+stream = client.chat.completions.create(
     model="gemini-3.8-flash-thinking",
     messages=[
-        {"role": "system", "content": "你是一位顶尖的架构专家。"},
-        {"role": "user", "content": "请深度剖析现代高并发异步微服务管道的设计模式。"}
+        {"role": "system", "content": "You are a systems engineering advisor."},
+        {"role": "user", "content": "Explain the architectural trade-offs between stateless context replay and stateful server sessions."}
     ],
     temperature=0.2,
     stream=True
 )
 
-for chunk in response:
+for chunk in stream:
     delta = chunk.choices[0].delta
     if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-        print(f"\033[95m{delta.reasoning_content}\033[0m", end="", flush=True)
-    if delta.content:
+        print(f"[Thinking] {delta.reasoning_content}", end="", flush=True)
+    elif delta.content:
         print(delta.content, end="", flush=True)
+print()
 ```
 
----
-
-### 🌐 TypeScript / Node.js (含思考链流式输出)
+### 7.2 TypeScript / Node.js
 
 ```typescript
 import OpenAI from "openai";
 
-const openai = new OpenAI({
+const client = new OpenAI({
   baseURL: "http://localhost:8083/v1",
-  apiKey: process.env.GEMINI_API_KEY || "sk-gemini-YOUR-MASTER-KEY",
+  apiKey: process.env.GEMINI_API_KEY || "sk-gemini-master-key",
 });
 
 async function main() {
-  const stream = await openai.chat.completions.create({
+  const stream = await client.chat.completions.create({
     model: "gemini-3.8-flash-thinking",
-    messages: [{ role: "user", content: "用 3 句话介绍现代异步架构的优势。" }],
+    messages: [{ role: "user", content: "Summarize the ACID properties of relational databases." }],
     stream: true,
   });
 
@@ -133,8 +229,7 @@ async function main() {
     const delta = chunk.choices[0]?.delta as any;
     if (delta?.reasoning_content) {
       process.stdout.write(`\x1b[35m${delta.reasoning_content}\x1b[0m`);
-    }
-    if (delta?.content) {
+    } else if (delta?.content) {
       process.stdout.write(delta.content);
     }
   }
@@ -143,150 +238,136 @@ async function main() {
 main().catch(console.error);
 ```
 
----
-
-### 🐹 Go 语言
+### 7.3 Go（标准库，零外部依赖）
 
 ```go
 package main
 
 import (
-	"context"
-	"fmt"
+	"bytes"
+	"encoding/json"
 	"io"
-
-	openai "github.com/sashabaranov/go-openai"
+	"net/http"
+	"os"
 )
 
 func main() {
-	config := openai.DefaultConfig("sk-gemini-YOUR-MASTER-KEY")
-	config.BaseURL = "http://localhost:8083/v1"
-	client := openai.NewClientWithConfig(config)
-
-	req := openai.ChatCompletionRequest{
-		Model: "gemini-3.8-flash",
-		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleUser, Content: "请简述 Go channel 的底层数据结构。"},
+	payload := map[string]interface{}{
+		"model": "gemini-3.8-flash",
+		"messages": []map[string]string{
+			{"role": "user", "content": "Output a verified Go concurrency worker pool implementation."},
 		},
-		Stream: true,
+		"stream": false,
 	}
+	body, _ := json.Marshal(payload)
 
-	stream, err := client.CreateChatCompletionStream(context.Background(), req)
+	req, _ := http.NewRequest("POST", "http://localhost:8083/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-gemini-master-key")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		panic(err)
 	}
-	defer stream.Close()
+	defer resp.Body.Close()
 
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			panic(err)
-		}
-		fmt.Print(resp.Choices[0].Delta.Content)
-	}
+	io.Copy(os.Stdout, resp.Body)
 }
 ```
 
----
-
-### 🦀 Rust (Modern Reqwest)
+### 7.4 Rust（reqwest + tokio）
 
 ```rust
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
-    let body = json!({
-        "model": "gemini-3.8-flash",
-        "messages": [{"role": "user", "content": "请用一首五言绝句赞美异步系统之美。"}],
-        "temperature": 0.2
-    });
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer sk-gemini-master-key"));
 
-    let res = client.post("http://localhost:8083/v1/chat/completions")
-        .bearer_auth("sk-gemini-YOUR-MASTER-KEY")
-        .json(&body)
+    let client = reqwest::Client::new();
+    let res = client
+        .post("http://localhost:8083/v1/chat/completions")
+        .headers(headers)
+        .json(&json!({
+            "model": "gemini-3.8-flash",
+            "messages": [{"role": "user", "content": "Explain zero-copy deserialization in Rust."}],
+            "stream": false
+        }))
         .send()
-        .await?
-        .json::<serde_json::Value>()
         .await?;
 
-    println!("{}", res["choices"][0]["message"]["content"].as_str().unwrap_or(""));
+    let text = res.text().await?;
+    println!("{}", text);
     Ok(())
 }
 ```
 
----
-
-### 💻 cURL
+### 7.5 cURL
 
 ```bash
 curl -X POST http://localhost:8083/v1/chat/completions \
-  -H "Authorization: Bearer sk-gemini-YOUR-MASTER-KEY" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-gemini-master-key" \
   -d '{
     "model": "gemini-3.8-flash",
-    "messages": [{"role": "user", "content": "测试端到端链路"}],
-    "temperature": 0.1
+    "messages": [{"role": "user", "content": "Write a POSIX compliant shell script template."}],
+    "stream": true
   }'
 ```
 
----
+### 7.6 Obsidian（Smart Connections / Copilot）
 
-### 🔮 Obsidian (Smart Connections / Copilot 接入)
-
-1. 打开 Obsidian 设置 ➔ 进入 **Smart Connections** 或 **Copilot** 插件。
-2. **Custom OpenAI API Endpoint** 填写：`http://localhost:8083/v1`
-3. **API Key** 填写：`sk-gemini-YOUR-MASTER-KEY`
-4. **Model Name** 填写：`gemini-3.8-flash` 或 `gemini-3.8-flash-thinking`。
-5. 点击测试连接即可无限制接入 Google 顶尖模型作为个人知识大脑！
+1. 打开 Obsidian 设置面板，进入 **Smart Connections** 或 **Copilot**。
+2. 配置 **Custom OpenAI API Endpoint**：`http://localhost:8083/v1`
+3. 配置 **API Key**：`sk-gemini-master-key`（或启动时设置的 `--admin-token`）。
+4. 配置 **Model Identifier**：`gemini-3.8-flash` 或 `gemini-3.8-flash-thinking`。
 
 ---
 
-## ⚡ 快速启动指南
+## 8. 快速部署方式
 
-### 方式 A: 单二进制直接运行 (推荐)
+### 8.1 单二进制文件运行（推荐）
 
 ```bash
-# 1. 编译或下载二进制
+# 1. 编译二进制可执行文件
 go build -o gemini-web2api-go main.go
 
-# 2. 启动服务 (指定端口与管理面板 Admin Token)
-./gemini-web2api-go --port 8083 --admin-token 你的管理密码
+# 2. 启动服务（指定端口与管理口令）
+./gemini-web2api-go --port 8083 --admin-token YOUR-ADMIN-PASSWORD
 ```
 
-启动后在浏览器打开 [`http://localhost:8083/admin/`](http://localhost:8083/admin/) 即可进入 AETHER 控制中心！
+浏览器访问 `http://localhost:8083/admin/` 即可进入管理面板。
 
----
-
-### 方式 B: Docker 部署
+### 8.2 Docker 容器部署
 
 ```bash
 docker run -d \
-  --name aether-gateway \
+  --name gemini-web2api \
   -p 8083:8083 \
   -v $(pwd)/data:/app/data \
-  -e ADMIN_TOKEN=你的管理密码 \
+  -e ADMIN_TOKEN=YOUR-ADMIN-PASSWORD \
   --restart unless-stopped \
   zexadev/gemini-web2api-go:latest
 ```
 
 ---
 
-## 📋 生产环境推荐参数调优
+## 9. 命令行参数说明
 
-实测黄金比例调优矩阵：
-
-| 运行环境 | 推荐并发 (`-c`) | 批次合并 (`-b`) | 调优说明 |
-| :---: | :---: | :---: | :--- |
-| **单 IP 直连 (1~5 个账号)** | **3 ~ 4** | **2 ~ 3** | **⭐ 黄金平衡点**。Prompt 保持在 15K 字符以内，保证 0 报错秒回，绝不踩踏单 IP 并发上限（5）。 |
-| **多代理节点池 (5+ 节点)** | **10 ~ 25** | **3** | 出口 IP 充分分散，吞吐量可线性扩展 5 倍以上。 |
+| 命令行参数 | 环境变量 | 默认值 | 参数功能说明 |
+| :--- | :--- | :--- | :--- |
+| `--port` | `PORT` | `8083` | 网关服务与管理面板监听之 HTTP 端口。 |
+| `--admin-token` | `ADMIN_TOKEN` | 自动生成 | 管理面板登录与客户端 API 调用的主鉴权口令。 |
+| `--db` | `DATABASE_URL` | `sqlite://data/gemini.db` | SQLite 存储路径或 PostgreSQL / MySQL 连接字符串。 |
+| `--cookie-file` | `COOKIE_FILE` | （可选） | 自动导入 Netscape 或 JSON 格式之 Cookie 文件路径。 |
+| `--proxy` | `PROXY_URL` | （可选） | 静态上游代理 URL。 |
 
 ---
 
-## 📄 开源许可证
-本项目遵循 **MIT License**。
-仅供学术研究、本地自动化与个人知识库学习使用，请遵守 Google 官方服务条款。
+## 10. 开源协议
+
+本项目基于 MIT 许可证开源。
+仅供学术研究、本地知识库集成与个人开发测试使用。请严格遵守 Google 服务条款。

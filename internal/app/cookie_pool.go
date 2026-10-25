@@ -439,7 +439,31 @@ func poolHasCookie(cookie string) bool {
 // 轮转调度、代理池都是进程内状态，这个反代天生单实例，不存在跨进程并发挑号；也就
 // 不必为此上跨方言的事务/行锁（sqlite 无 FOR UPDATE、mysql 无 RETURNING，那条路
 // 全是方言分支）。挑号只是一次极快的 SELECT+UPDATE，串行化的争用可忽略。
-var pickMu sync.Mutex
+var (
+	pickMu            sync.Mutex
+	accountInflightMu sync.Mutex
+	accountInflight   = map[int64]int{}
+)
+
+// ReleaseAccountSlot 释放指定账号的在途并发槽位。
+// 必须在单次请求（含流式输出全部结束）后调用，确保账号在 Google 端绝不同时存在两个并发会话。
+func ReleaseAccountSlot(id int64) {
+	if id <= 0 {
+		return
+	}
+	accountInflightMu.Lock()
+	defer accountInflightMu.Unlock()
+	if accountInflight[id] > 0 {
+		accountInflight[id]--
+	}
+}
+
+// AccountInflightCount 获取指定账号当前的在途请求数。
+func AccountInflightCount(id int64) int {
+	accountInflightMu.Lock()
+	defer accountInflightMu.Unlock()
+	return accountInflight[id]
+}
 
 // pickCookieAccount 从池里挑一个 enabled 账号，按 last_used_at 最久优先，
 // 挑中后立刻把 last_used_at 记为现在（下次轮到别人）。池空返回 (nil,false)。
@@ -452,6 +476,10 @@ func pickCookieAccount() (*CookieAccount, bool) {
 // 存在的理由：一个 cookie 失效不该让整个请求失败。池子里 2 个号坏 1 个，
 // 轮转会让大约一半请求撞上坏号 —— 表现就是"成功率莫名其妙很低"，而每次失败
 // 看起来都像是上游的问题。
+//
+// 核心稳定机制：严格保证单账号同一瞬间最多只有一个在途请求（accountInflight == 0）。
+// 任何 Google Web 端会话若受到并发推流，均会被 Google 风控判定为异常重放或并发冲突，
+// 导致 BardErrorInfo [1095] 限流或整组 Cookie 被服务端注销踢下线。
 func pickCookieAccountExcept(skip map[int64]bool) (*CookieAccount, bool) {
 	pickMu.Lock()
 	defer pickMu.Unlock()
@@ -476,6 +504,18 @@ func pickCookieAccountExcept(skip map[int64]bool) (*CookieAccount, bool) {
 		if skip[a.ID] {
 			continue
 		}
+
+		// 检查该账号当前是否已有在途请求
+		accountInflightMu.Lock()
+		busy := accountInflight[a.ID] >= 1
+		if !busy {
+			accountInflight[a.ID]++
+		}
+		accountInflightMu.Unlock()
+		if busy {
+			continue
+		}
+
 		_, _ = getDB().Exec(`UPDATE accounts SET last_used_at=? WHERE id=?`, time.Now().Unix(), a.ID)
 		return &a, true
 	}

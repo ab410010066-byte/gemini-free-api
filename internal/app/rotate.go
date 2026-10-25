@@ -69,22 +69,12 @@ func rotateAccount(a CookieAccount) (time.Duration, []string, error) {
 	return defaultRotateInterval, nil, nil
 }
 
-// tryRotate1PSIDTS 用哨兵 payload 换发 1PSIDTS。没 __Secure-1PSID 或距上次不足
-// 60 秒就跳过（不算失败）。
+// tryRotate1PSIDTS: 已全面停用主动向 accounts.google.com/RotateCookies 发送模拟请求。
+// 实测证实由后端主动抢换 1PSIDTS 会导致本地浏览器（Firefox）的旧 Token 被 Google 判定为 Token 重放攻击，
+// 从而下发指令强制注销整组会话（导致用户账号被登出）。
+// 所有凭证保活均统一由本地 Firefox 容器合法定时自动续约，网关仅通过本地 SQLite 静默安全同步。
 func tryRotate1PSIDTS(id int64, cookie, proxyURL string) (string, []string, error) {
-	if cookieValue(cookie, "__Secure-1PSID") == "" {
-		return cookie, nil, nil
-	}
-	if ok, _ := allow1PSIDTSRotate(id); !ok {
-		logf("[rotate] 账号 #%d 跳过 1PSIDTS 刷新（距上次不足 %s，避免 429）", id, min1PSIDTSInterval)
-		return cookie, nil, nil
-	}
-	c2, names, err := rotate1PSIDTS(cookie, proxyURL)
-	note1PSIDTSAttempt(id, err)
-	if err != nil {
-		return cookie, nil, err
-	}
-	return c2, names, nil
+	return cookie, nil, nil
 }
 
 func allow1PSIDTSRotate(id int64) (bool, time.Duration) {

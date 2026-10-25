@@ -100,7 +100,7 @@ func initRuntimeConfig() {
 
 		ContextCompression:   true,
 		ContextFileUpload:    true,
-		ChunkedMultiTurn:     true,
+		ChunkedMultiTurn:     false,
 		ContextFileThreshold: 30000,
 		ContextFileMaxBytes:  155000,
 		ChunkRuneSize:        80000,

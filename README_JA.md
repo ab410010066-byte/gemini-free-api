@@ -1,80 +1,184 @@
-# 🌌 AETHER GATEWAY · Gemini Web2API (Go 日本語旗艦版)
+# Gemini Web2API ゲートウェイ (Go 言語版)
 
-> **Google Gemini Web版を高品質なOpenAI互換APIゲートウェイに変換**  
-> **Google公式APIキー不要 · 無料クォータ無制限 · Apple Liquid Glass ＆ Linear 遠隔測定ダッシュボード · Firefox Multi-Account Containers 物理隔離（ログアウトゼロ） · 1.2MB 3段階長文突破パイプライン**
+> 高性能でプライベート環境にデプロイ可能なリバースプロキシゲートウェイ。Google Gemini Web を OpenAI 完全互換の `/v1/chat/completions` ストリーミング API に変換します。Google 課金 API キーは不要であり、アカウント単位の厳格な並行分離排他制御により強制ログアウトを根本から防止し、高密度リアルタイム監視ダッシュボードを内蔵しています。
 
-<div align="center">
-
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=for-the-badge&logo=go)](https://golang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
-[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20v1%20Compatible-00F2FE?style=for-the-badge&logo=openai)](https://platform.openai.com/docs/api-reference)
-[![UI: Apple Liquid Glass](https://img.shields.io/badge/UI-Apple%20Liquid%20Glass%20%2B%20Linear-8B5CF6?style=for-the-badge)](#1-🎛️-aether-旗艦遠隔測定ダッシュボード-apple-liquid-glass--linear-ui)
-[![Zero Logout](https://img.shields.io/badge/Firefox-Multi--Account%20Containers-FF7139?style=for-the-badge&logo=firefox)](https://addons.mozilla.org/firefox/addon/multi-account-containers/)
-[![Long Context](https://img.shields.io/badge/Context-1.2MB%203--Tier%20Engine-10B981?style=for-the-badge)](https://gemini.google.com)
-
-[日本語](README_JA.md) | [English](README.md) | [繁體中文](README_ZH-TW.md) | [简体中文](README_CN.md)
-
-</div>
+[English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md) | [簡體中文](README_CN.md)
 
 ---
 
-## 🚀 なぜ AETHER GATEWAY を選ぶのか？
-
-公式 Google Gemini API には厳しい従量課金とレートリミットが課されています。従来のオープンソースプロキシでは、**複数アカウントが互いにログアウトする**、**長文プロンプトで 502 エラーが頻発する**、**同時リクエスト集中で `BardErrorInfo [1095]` BAN が発生する**といった課題がありました。
-
-**AETHER GATEWAY** はこれらの課題を完全に解決し、安定した高スループット環境を提供します：
+## 1. システムアーキテクチャ
 
 ```
-[クライアント: Python / TypeScript / Go / Rust / Obsidian / Next.js]
-                           ↓ http://localhost:8083/v1/chat/completions
-┌────────────────────────────────────────────────────────────────────────┐
-│                        AETHER GATEWAY コア                             │
-│  • 単一IP同時実行リミッター (1095空フレーム拒否を自動防止)             │
-│  • 3段階長文突破パイプライン (可逆圧縮 → 155KB添付 → 1.2MB分割投入)    │
-│  • Chrome 146 TLS / JA4 ブラウザフィンガープリント偽装 + BL自動同期    │
-│  • Apple Liquid Glass ＆ Linear 漆黒ダークモードダッシュボード         │
-└────────────────────────────────────────────────────────────────────────┘
-       ↓ 物理 Cookie 隔離コンテナ               ↓ 出口プロキシメッシュ
-┌───────────────────────────────────┐     ┌───────────────────────────────┐
-│ Firefox Multi-Account Containers  │     │ プロキシノードプール          │
-│ • バックエンドから containers.json 注入│     │ • 複数出口IPローテーション    │
-│ • 複数アカウント同時ログイン隔離  │     │ • サーキットブレーカー機能    │
-│ • SQLite SNlM0e リアルタイム検知  │     │ • 80 RPH Google BANレーダー   │
-└───────────────────────────────────┘     └───────────────────────────────┘
-                           ↓ 逆向 StreamGenerate プロトコル
-            [Google Gemini Web (gemini-3.8-flash / thinking)]
+[クライアントアプリケーション]
+(Python / TypeScript / Go / Rust / cURL / Obsidian)
+                      |
+                      v  HTTP POST /v1/chat/completions
++------------------------------------------------------------------------+
+|                    Gemini Web2API ゲートウェイコア                     |
+|                                                                        |
+|  [イングレスおよび認証層]                                              |
+|    - Bearer Token 検証および権限インターセプト                         |
+|    - OpenAI データ仕様検証とロール正規化                               |
+|                                                                        |
+|  [長文コンテキスト前処理パイプライン]                                  |
+|    - 可逆的空白文字圧縮および Tool 定義軽量化                          |
+|    - ネイティブコンテキストファイル添付パイプライン (<155 KB)           |
+|                                                                        |
+|  [トラフィック制御およびスケジューラ]                                  |
+|    - IP 出口スロット制限 (デフォルト並行 5、80 RPH 規制防止境界)        |
+|    - アカウント排他排他ガード (厳格な 1 対 1 分離で強制ログアウト防止)  |
+|                                                                        |
+|  [アップストリーム通信エンジン]                                        |
+|    - Chrome TLS / JA4 ハンドシェイク偽装 (bogdanfinn/tls-client)       |
+|    - Google Web フロントエンド bl ビルドバージョンの動的追従           |
+|    - SSE ストリームパーサーおよび reasoning_content 思考プロセスの抽出 |
++------------------------------------------------------------------------+
+            |                                           |
+            v ホスト直接接続                            v 出口プロキシメッシュ
++-------------------------------+           +-------------------------------+
+| ホストネットワーク NIC        |           | プロキシノードプール          |
+| 単一 IP (80 RPH 安全境界)     |           | マルチ IP ラウンドロビン      |
++-------------------------------+           +-------------------------------+
+            \                                           /
+             \                                         /
+              v                                       v
+         [Google Gemini Web バックエンド (StreamGenerate プロトコル)]
 ```
 
+### 1.1 リクエストライフサイクルとスケジューリング
+
+```mermaid
+flowchart TD
+    Req[クライアントリクエスト受信] --> Auth{Bearer Token 検証}
+    Auth -- 失敗 --> E401[HTTP 401 Unauthorized 返却]
+    Auth -- 成功 --> Ingest[OpenAI 履歴メッセージの正規化]
+    
+    Ingest --> LengthCheck{Prompt バイト長チェック}
+    LengthCheck -- "< 30 KB" --> InflightSlot[IP 出口並行スロット取得]
+    LengthCheck -- "30 KB - 155 KB" --> MakeDoc[ネイティブ添付ファイルに変換] --> InflightSlot
+    LengthCheck -- "> 155 KB" --> E400[HTTP 400 Context Length Exceeded 返却]
+    
+    InflightSlot -- IP スロット満杯 --> E429IP[HTTP 429 レート制限返却]
+    InflightSlot -- スロット取得成功 --> AcctSelect[現在実行中のない空きアカウントを選択]
+    
+    AcctSelect -- 全アカウントビジー --> WaitAcct{短時間キュー待機 (最大 6 秒)}
+    WaitAcct -- タイムアウトかつ FallbackAnon 有効 --> AnonReq[匿名ルートへフォールバック]
+    WaitAcct -- タイムアウトかつ厳格モード --> E429Acct[HTTP 429 アカウントビジー返却]
+    WaitAcct -- アカウント解放確認 --> ExecReq[StreamGenerate リクエスト実行]
+    AcctSelect -- 空きアカウント取得成功 --> ExecReq
+    
+    ExecReq --> SSETrans[チャンクプロトコルを OpenAI SSE ストリームに変換]
+    SSETrans --> RelSlot[IP スロットおよびアカウント排他ロックを解放]
+    RelSlot --> ClientEnd[クライアントストリーミング完了]
+```
+
+### 1.2 アカウント分離とゼロログアウト同期設計
+
+従来のリバースプロキシでは、並行アクセスや定期的なトークンリフレッシュ時に、バックエンドから Google へ直接 `RotateCookies` をリクエストすることにより、ブラウザ側トークンがリプレイ攻撃と判定され、Google サーバーによってセッションが強制切断される問題が頻発していました。本システムはアーキテクチャの根幹でこの課題を解決しています：
+
+```mermaid
+flowchart LR
+    subgraph Firefox コンテナ環境
+        C1[コンテナ 1: アカウント A]
+        C2[コンテナ 2: アカウント B]
+        C3[コンテナ 3: アカウント C]
+    end
+
+    subgraph OS ローカルストレージ
+        SQLite[(Firefox cookies.sqlite)]
+    end
+
+    subgraph ゲートウェイ常駐プロセス
+        Poller[バックグラウンド読取ポーラー]
+        Pool[(メモリ内アカウントプール)]
+        InflightLock[アカウント単位の厳格な 1 対 1 排他ロック]
+    end
+
+    C1 -->|ブラウザ正規のバックグラウンド更新| SQLite
+    C2 -->|ブラウザ正規のバックグラウンド更新| SQLite
+    C3 -->|ブラウザ正規のバックグラウンド更新| SQLite
+
+    SQLite -->|10 分ごとに読み取り安全同期| Poller
+    Poller -->|差分更新| Pool
+    Pool --> InflightLock
+    InflightLock -->|同一アカウントへ同時に 2 接続以上流さない| Upstream[Google Gemini Web]
+```
+
+* **自発的 RotateCookies の全面廃止**: バックエンドから Google へ模擬的なトークン再発行リクエストを発行しないため、セッション衝突を完全に回避します。
+* **アカウント単位の厳格な単一並行制限**: 1 つの Google アカウントにつき、同一瞬間に処理できるストリーミングリクエストを 1 件に制限。並行リクエストは他の空きアカウントへ均等分散されるかキュー待機され、セッション破棄を根絶します。
+
 ---
 
-## ✨ コア機能とブレークスルー
+## 2. コアアーキテクチャ構成要素
 
-### 1. 🎛️ AETHER 旗艦遠隔測定ダッシュボード (Apple Liquid Glass & Linear UI)
-* **究極のデザイン美学**：漆黒のカーボン（`#06080D`）にデュアルハイライトマイクロボーダー（`inset 0 1px 0 rgba(255,255,255,0.12)`）とアクリルすりガラス（`backdrop-filter: blur(24px)`）を採用。
-* **Google 80 RPH BANレッドラインレーダー (Distance to Ban Redline)**：単一IPの80〜180 RPH WAF制限までの安全マージンをリアルタイムで可視化。
-* **P50 / P95 レイテンシー波形グラフ (Chart.js)**：リクエスト量、中央値レイテンシー、95パーセンタイル値をデュアルY軸で追跡。
-* **フライトログと全経路フォレンジックドロワー**：検索、ページネーション、CSV出力、TTFB（初文字応答時間）と生成思考時間の内訳を完全表示。
-* **完全オフライン対応**：すべてのライブラリをバイナリ内部に組み込み、外部CDN依存はゼロ。
-
-### 2. 🦊 Firefox 多重コンテナ自動構築＆ライブウィザード (ログアウトゼロ)
-* **0クリック自動コンテナ注入**：Firefoxの `containers.json` に直接書き込み、分離コンテナを一括生成。手動操作は一切不要。
-* **物理 Cookie 隔離**：Firefox Contextual Identities により、同一マシンで5〜50個のGoogleアカウントをセッション競合なく同時保持。
-* **リアルタイム検知レーダー**：ローカルの `cookies.sqlite` を自動ポーリングし、ログイン完了を緑色ランプ（`🟢 SNlM0e ✅`）で即座に表示。
-
-### 3. 📚 1.2MB 3段階長文突破パイプライン
-* **Tier 1 (32KB未満)**：可逆最適化によるダイレクト送信。
-* **Tier 2 (32KB〜155KB)**：Google公式の `message.txt` テキスト添付ファイルへ透過的に変換。
-* **Tier 3 (155KB〜1.2MB)**：マルチターン会話として自動分割し、完了後にリモート履歴を自動削除。
-
-### 4. 🧠 思考モデル（Thinking）とSSEストリーミング
-* `gemini-3.8-flash-thinking`、`gemini-3.7-flash` に完全対応。
-* `delta.reasoning_content` を美しいアコーディオンドロワーにリアルタイム描画。
+| コンポーネント | 主な責務 | 障害復旧および保護メカニズム |
+| :--- | :--- | :--- |
+| **イングレスエンジン (Ingress Engine)** | OpenAI `/v1/chat/completions`、`/v1/models` エンドポイントの提供。 | 標準的な JSON エラー (`invalid_request_error`、`rate_limit_exceeded`) を返却。 |
+| **アカウントプールマネージャー (Account Fleet)** | SQLite を基盤としたアカウント資格情報、使用制限、プロキシ設定の管理。 | 3 回連続認証失敗時に自動的にアカウントを一時停止し、全体の遅延を防止。 |
+| **単一アカウント排他ガード (In-Flight Guard)** | アカウントごとの同時実行数を厳格に 1 に制限。 | 同時リクエスト時に最大 6 秒間キューイング、または他の空きアカウントへ分散。 |
+| **IP スロットリミッター (IP Slot Limiter)** | 出口 IP ごとの同時接続数、RPM、RPH を厳密に制御。 | Google WAF の規制閾値に近づいた際、安全に拒絶または別プロキシへ退避。 |
+| **長文コンテキスト前処理部** | 余分な空白の圧縮および長文テキストのファイル添付化。 | 155 KB の上限を超える場合は HTTP 400 を返し、Google 側のアカウント制裁を回避。 |
+| **テレメトリ UI (Telemetry UI)** | 内蔵管理画面と Chart.js によるレイテンシ可視化。 | 単一バイナリに 100% 埋め込み、外部 CDN や外部ネットワークへの依存ゼロ。 |
 
 ---
 
-## 🛠️ 主な言語での呼び出し例
+## 3. 対応モデル一覧表
 
-### 🐍 Python (OpenAI SDK + 思考プロセス抽出)
+| モデル識別子 (Model ID) | バックエンド Hex コード | 思考プロセス対応 (Thinking) | マルチモーダル (画像/ファイル) | 最大出力 Token | 推奨されるユースケース |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `gemini-3.8-flash` | `56fdd199312815e2` | なし | あり | 8,192 | 低レイテンシ、高スループットな応答 |
+| `gemini-3.8-flash-thinking` | `56fdd199312815e2` | あり (`reasoning_content`) | あり | 8,192 | 高度な論理推論、推論プロセスの可視化 |
+| `gemini-3.7-flash` | `fbb127bbb056c959` | なし | あり | 8,192 | 日常的なテキスト変換・要約処理 |
+| `gemini-3.5-flash-lite` | `8c46e95b1a07cecc` | なし | あり | 8,192 | 軽量タスク、フォールバック実行 |
+| `gemini-3.1-pro` | `e6fa609c3fa255c0` | あり | あり | 8,192 | 深層分析、専門分野のデータ抽出 |
+
+---
+
+## 4. 実行時設定パラメータ一覧
+
+全パラメータは SQLite データベースに永続化され、管理ダッシュボード (`http://localhost:8083/admin/`) からサービスを再起動することなく即座に動的更新可能です。
+
+| パラメータ名 | データ型 | デフォルト値 | 推奨安全範囲 | 機能説明および安定性への影響 |
+| :--- | :--- | :--- | :--- | :--- |
+| `per_ip_concurrent` | 整数 | `5` | `1 - 10` | 1 つの出口 IP あたりの最大同時実行数。10 を超えると Google の拒絶対象となります。 |
+| `per_ip_rpm` | 整数 | `30` | `10 - 60` | 1 つの出口 IP あたりの 1 分間最大リクエスト数。 |
+| `per_ip_rph` | 整数 | `80` | `40 - 150` | 1 つの出口 IP あたりの 1 時間最大リクエスト数。Google WAF 規制線未満に保持。 |
+| `max_prompt_bytes` | 整数 | `120000` | `50000 - 150000` | 入力プロンプトの UTF-8 バイト上限。この値を超えると添付ファイル化パイプラインへ遷移。 |
+| `context_compression` | 真偽値 | `true` | `true / false` | プロンプト内の重複空白文字や無駄なフォーマットを可逆的に軽量化。 |
+| `context_file_upload` | 真偽値 | `true` | `true / false` | 30 KB - 155 KB の長文プロンプトを自動的にテキストファイル添付として送信。 |
+| `fallback_anon` | 真偽値 | `false` | `true / false` | アカウントが全てビジーの際、思考を伴わないリクエストを一時的に匿名ルートへ迂回。 |
+| `impersonate` | 文字列 | `chrome_146` | TLS プロファイル | 偽装するブラウザの TLS および JA4 署名プロファイル。 |
+| `gemini_bl_auto` | 真偽値 | `true` | `true / false` | 6 時間ごとに Google Web の最新 bl バージョンを自動取得して適用。 |
+
+---
+
+## 5. 本番環境向けデプロイおよびレート調整指針
+
+高負荷耐久テストに基づく各環境の推奨パラメータは以下の通りです：
+
+| ネットワーク構成 | 有効アカウント数 | 推奨並行スロット | 安全 RPM | 安全 RPH | 運用上の注意点 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **ホスト直接接続 IP** | 1 - 5 アカウント | 3 - 5 | 15 - 25 | 60 - 80 | 個人利用や Obsidian ナレッジベース連携における推奨設定。 |
+| **単一専用プロキシ** | 1 - 3 アカウント | 3 - 4 | 15 - 20 | 60 - 75 | ホスト IP の露出を防ぎ、中規模バッチ処理に適しています。 |
+| **分散プロキシプール** | 5 - 20 アカウント | 10 - 25 | 60 - 120 | 300 - 800 | 負荷を複数のプロキシノードに分散させる高スループット構成。 |
+
+---
+
+## 6. アップストリーム異常検知と自動復旧マッピング
+
+| アップストリーム検知パターン | HTTP 状態コード | 根本原因 | ゲートウェイの自動対処 |
+| :--- | :--- | :--- | :--- |
+| `no SNlM0e in page` | 401 Unauthorized | アカウントのセッション期限切れまたはログアウト | 失敗回数を加算し、プール内の別の健全なアカウントへ自動切替。 |
+| `BardErrorInfo [1095]` | 429 Too Many Requests | IP レベルの瞬間過負荷またはレート制限 | 当該 IP スロットを満杯とみなし、リクエストを一時停止または別プロキシへ退避。 |
+| `302 -> /sorry/index` | 429 Too Many Requests | Google WAF による一時的 IP 遮断 (80-120 分間継続) | プロキシノードの自動サーキットブレーカーを発動し、冷却待機へ移行。 |
+| `PromptTooLongError` | 400 Bad Request | プロンプトが 155 KB の添付安全上限を超過 | `context_length_exceeded` を返し、アカウント制裁リスクを未然に防止。 |
+| `xsrf token mismatch` | 502 Bad Gateway | キャッシュされた XSRF トークンの失効 | メモリ内キャッシュを破棄し、新しいトークンを再取得して即座に自動再試行。 |
+
+---
+
+## 7. プログラミング言語別インテグレーションコード
+
+### 7.1 Python (公式 OpenAI SDK)
 
 ```python
 import os
@@ -82,43 +186,42 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:8083/v1",
-    api_key=os.environ.get("GEMINI_API_KEY", "sk-gemini-YOUR-MASTER-KEY")
+    api_key=os.environ.get("GEMINI_API_KEY", "sk-gemini-master-key")
 )
 
-response = client.chat.completions.create(
+stream = client.chat.completions.create(
     model="gemini-3.8-flash-thinking",
     messages=[
-        {"role": "system", "content": "あなたは優秀なシステムアーキテクトです。"},
-        {"role": "user", "content": "非同期マイクロサービスパイプラインの設計パターンを解説してください。"}
+        {"role": "system", "content": "You are a systems engineering advisor."},
+        {"role": "user", "content": "Explain the architectural trade-offs between stateless context replay and stateful server sessions."}
     ],
     temperature=0.2,
     stream=True
 )
 
-for chunk in response:
+for chunk in stream:
     delta = chunk.choices[0].delta
     if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-        print(f"\033[95m{delta.reasoning_content}\033[0m", end="", flush=True)
-    if delta.content:
+        print(f"[Thinking] {delta.reasoning_content}", end="", flush=True)
+    elif delta.content:
         print(delta.content, end="", flush=True)
+print()
 ```
 
----
-
-### 🌐 TypeScript / Node.js (思考ストリーミング対応)
+### 7.2 TypeScript / Node.js
 
 ```typescript
 import OpenAI from "openai";
 
-const openai = new OpenAI({
+const client = new OpenAI({
   baseURL: "http://localhost:8083/v1",
-  apiKey: process.env.GEMINI_API_KEY || "sk-gemini-YOUR-MASTER-KEY",
+  apiKey: process.env.GEMINI_API_KEY || "sk-gemini-master-key",
 });
 
 async function main() {
-  const stream = await openai.chat.completions.create({
+  const stream = await client.chat.completions.create({
     model: "gemini-3.8-flash-thinking",
-    messages: [{ role: "user", content: "現代の非同期アーキテクチャの利点を3行で説明してください。" }],
+    messages: [{ role: "user", content: "Summarize the ACID properties of relational databases." }],
     stream: true,
   });
 
@@ -126,8 +229,7 @@ async function main() {
     const delta = chunk.choices[0]?.delta as any;
     if (delta?.reasoning_content) {
       process.stdout.write(`\x1b[35m${delta.reasoning_content}\x1b[0m`);
-    }
-    if (delta?.content) {
+    } else if (delta?.content) {
       process.stdout.write(delta.content);
     }
   }
@@ -136,129 +238,136 @@ async function main() {
 main().catch(console.error);
 ```
 
----
-
-### 🐹 Go
+### 7.3 Go (標準ライブラリのみ、外部依存関係なし)
 
 ```go
 package main
 
 import (
-	"context"
-	"fmt"
+	"bytes"
+	"encoding/json"
 	"io"
-
-	openai "github.com/sashabaranov/go-openai"
+	"net/http"
+	"os"
 )
 
 func main() {
-	config := openai.DefaultConfig("sk-gemini-YOUR-MASTER-KEY")
-	config.BaseURL = "http://localhost:8083/v1"
-	client := openai.NewClientWithConfig(config)
-
-	req := openai.ChatCompletionRequest{
-		Model: "gemini-3.8-flash",
-		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleUser, Content: "Go channel の内部構造を簡潔に説明してください。"},
+	payload := map[string]interface{}{
+		"model": "gemini-3.8-flash",
+		"messages": []map[string]string{
+			{"role": "user", "content": "Output a verified Go concurrency worker pool implementation."},
 		},
-		Stream: true,
+		"stream": false,
 	}
+	body, _ := json.Marshal(payload)
 
-	stream, err := client.CreateChatCompletionStream(context.Background(), req)
+	req, _ := http.NewRequest("POST", "http://localhost:8083/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-gemini-master-key")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		panic(err)
 	}
-	defer stream.Close()
+	defer resp.Body.Close()
 
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			panic(err)
-		}
-		fmt.Print(resp.Choices[0].Delta.Content)
-	}
+	io.Copy(os.Stdout, resp.Body)
 }
 ```
 
----
-
-### 🦀 Rust (Modern Reqwest)
+### 7.4 Rust (reqwest + tokio)
 
 ```rust
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
-    let body = json!({
-        "model": "gemini-3.8-flash",
-        "messages": [{"role": "user", "content": "非同期パイプラインの美しさを短歌で表現してください。"}],
-        "temperature": 0.2
-    });
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer sk-gemini-master-key"));
 
-    let res = client.post("http://localhost:8083/v1/chat/completions")
-        .bearer_auth("sk-gemini-YOUR-MASTER-KEY")
-        .json(&body)
+    let client = reqwest::Client::new();
+    let res = client
+        .post("http://localhost:8083/v1/chat/completions")
+        .headers(headers)
+        .json(&json!({
+            "model": "gemini-3.8-flash",
+            "messages": [{"role": "user", "content": "Explain zero-copy deserialization in Rust."}],
+            "stream": false
+        }))
         .send()
-        .await?
-        .json::<serde_json::Value>()
         .await?;
 
-    println!("{}", res["choices"][0]["message"]["content"].as_str().unwrap_or(""));
+    let text = res.text().await?;
+    println!("{}", text);
     Ok(())
 }
 ```
 
----
-
-### 💻 cURL
+### 7.5 cURL
 
 ```bash
 curl -X POST http://localhost:8083/v1/chat/completions \
-  -H "Authorization: Bearer sk-gemini-YOUR-MASTER-KEY" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-gemini-master-key" \
   -d '{
     "model": "gemini-3.8-flash",
-    "messages": [{"role": "user", "content": "エンドツーエンド接続確認"}],
-    "temperature": 0.1
+    "messages": [{"role": "user", "content": "Write a POSIX compliant shell script template."}],
+    "stream": true
   }'
 ```
 
----
+### 7.6 Obsidian (Smart Connections / Copilot)
 
-### 🔮 Obsidian (Smart Connections / Copilot)
-
-1. Obsidian 設定 ➔ **Smart Connections** または **Copilot** を選択。
-2. **Custom OpenAI API Endpoint**: `http://localhost:8083/v1`
-3. **API Key**: `sk-gemini-YOUR-MASTER-KEY`
-4. **Model Name**: `gemini-3.8-flash` または `gemini-3.8-flash-thinking`。
+1. Obsidian の設定を開き、**Smart Connections** または **Copilot** プラグインへ移動します。
+2. **Custom OpenAI API Endpoint** に `http://localhost:8083/v1` を指定します。
+3. **API Key** に `sk-gemini-master-key` (または設定した `--admin-token`) を指定します。
+4. **Model Identifier** に `gemini-3.8-flash` または `gemini-3.8-flash-thinking` を指定します。
 
 ---
 
-## ⚡ クイックスタート
+## 8. クイックスタート
+
+### 8.1 単一バイナリによる直接起動 (推奨)
 
 ```bash
-# 1. ビルド
+# 1. バイナリのビルド
 go build -o gemini-web2api-go main.go
 
-# 2. 起動
+# 2. サーバーの起動 (ポートおよび管理トークンを指定)
 ./gemini-web2api-go --port 8083 --admin-token YOUR-ADMIN-PASSWORD
 ```
-ブラウザで [`http://localhost:8083/admin/`](http://localhost:8083/admin/) を開くと、AETHER 制御センターが表示されます。
+
+ブラウザで `http://localhost:8083/admin/` にアクセスして管理ダッシュボードを開きます。
+
+### 8.2 Docker コンテナによる実行
+
+```bash
+docker run -d \
+  --name gemini-web2api \
+  -p 8083:8083 \
+  -v $(pwd)/data:/app/data \
+  -e ADMIN_TOKEN=YOUR-ADMIN-PASSWORD \
+  --restart unless-stopped \
+  zexadev/gemini-web2api-go:latest
+```
 
 ---
 
-## 📋 本番環境の推奨パラメータ
+## 9. コマンドライン引数一覧
 
-| 動作環境 | 推奨並行数 (`-c`) | バッチサイズ (`-b`) | 運用メモ |
-| :---: | :---: | :---: | :--- |
-| **単一ホストIP直結 (1〜5 アカウント)** | **3 〜 4** | **2 〜 3** | **⭐ 黄金比率**。プロンプトを15k文字以内に保ち、1095エラーを回避して瞬時応答を維持。 |
-| **分散プロキシプール (5+ ノード)** | **10 〜 25** | **3** | 出口IPを分散し、スループットをリニアに拡大可能。 |
+| コマンドライン引数 | 環境変数 | デフォルト値 | 説明 |
+| :--- | :--- | :--- | :--- |
+| `--port` | `PORT` | `8083` | ゲートウェイおよび管理画面がリッスンする HTTP ポート。 |
+| `--admin-token` | `ADMIN_TOKEN` | 自動生成 | 管理画面ログインおよびクライアント呼び出し用のマスターキー。 |
+| `--db` | `DATABASE_URL` | `sqlite://data/gemini.db` | SQLite データベースファイルのパス、または PostgreSQL / MySQL 接続文字列。 |
+| `--cookie-file` | `COOKIE_FILE` | (任意) | 初期投入用の Netscape または JSON 形式の Cookie ファイルパス。 |
+| `--proxy` | `PROXY_URL` | (任意) | 静的アップストリームプロキシ URL。 |
 
 ---
 
-## 📄 ライセンス
-MIT License
+## 10. ライセンス
+
+MIT ライセンスの下で配布されています。
+研究、ローカル開発、パーソナルナレッジベース構築を目的としています。Google の利用規約を遵守してご利用ください。

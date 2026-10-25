@@ -1,86 +1,184 @@
-# 🌌 AETHER GATEWAY · Gemini Web2API (Go Edition)
+# Gemini Web2API Gateway (Go Edition)
 
-> **Enterprise-Grade Gemini Web to OpenAI-Compatible Reverse Proxy & Telemetry Gateway**  
-> **Zero Google API Key Required · No Paid Quota Walls · Apple Liquid Glass & Linear Telemetry Command Center · Firefox Multi-Account Containers Fleet Engine (Zero-Logout) · 1.2MB 3-Tier Long Context Pipeline**
+> High-performance, self-hosted reverse proxy transforming Google Gemini Web into an OpenAI-compatible `/v1/chat/completions` streaming API. Requires no Google API key, enforces per-account concurrency isolation to prevent session invalidation, and features embedded real-time telemetry.
 
-<div align="center">
-
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=for-the-badge&logo=go)](https://golang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
-[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20v1%20Compatible-00F2FE?style=for-the-badge&logo=openai)](https://platform.openai.com/docs/api-reference)
-[![UI: Apple Liquid Glass](https://img.shields.io/badge/UI-Apple%20Liquid%20Glass%20%2B%20Linear-8B5CF6?style=for-the-badge)](#1-🎛️-aether-telemetry-command-center-apple-liquid-glass--linear-ui)
-[![Zero Logout](https://img.shields.io/badge/Firefox-Multi--Account%20Containers-FF7139?style=for-the-badge&logo=firefox)](https://addons.mozilla.org/firefox/addon/multi-account-containers/)
-[![Long Context](https://img.shields.io/badge/Context-1.2MB%203--Tier%20Engine-10B981?style=for-the-badge)](https://gemini.google.com)
-
-[English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md) | [简体中文](README_CN.md)
-
-</div>
+[English](README.md) | [繁體中文](README_ZH-TW.md) | [日本語](README_JA.md) | [簡體中文](README_CN.md)
 
 ---
 
-## 🚀 Why AETHER GATEWAY?
-
-Official Google Gemini APIs enforce strict monthly cost tiers, rate limits, and regional constraints. Generic open-source reverse proxies frequently break down under production workloads: **Google accounts randomly logging each other out**, **long prompts crashing with 502 Bad Gateway**, and **concurrency spikes triggering `BardErrorInfo [1095]` IP throttling**.
-
-**AETHER GATEWAY** completely re-engineers this experience into a resilient, high-throughput, autonomous proxy engine:
+## 1. System Architecture
 
 ```
-[Clients: Python / TypeScript / Go / Rust / Obsidian / Next.js / AI Agents]
-                           ↓ http://localhost:8083/v1/chat/completions
-┌────────────────────────────────────────────────────────────────────────┐
-│                        AETHER GATEWAY CORE                             │
-│  • Per-IP Concurrency Limiter (Guards against 1095 empty frame blocks)  │
-│  • 3-Tier Long Context Pipeline (Lossless → 155KB Attach → 1.2MB Chunk)│
-│  • Chrome 146 TLS / JA4 Browser Fingerprint Spoofing + Dynamic BL Sync │
-│  • Apple Liquid Glass & Linear Obsidian Dark Telemetry Dashboard       │
-└────────────────────────────────────────────────────────────────────────┘
-       ↓ Physical Cookie Isolation              ↓ Egress Mesh Routing
-┌───────────────────────────────────┐     ┌───────────────────────────────┐
-│ Firefox Multi-Account Containers  │     │ Proxy Mesh Egress Nodes       │
-│ • 0-Click auto-provisioning       │     │ • Multi-IP load distribution  │
-│ • Physical cookie isolation       │     │ • Circuit breaker & failover  │
-│ • Real-time SNlM0e detector radar │     │ • 80 RPH Google Ban Radar     │
-└───────────────────────────────────┘     └───────────────────────────────┘
-                           ↓ Reverse StreamGenerate Protocol
-            [Google Gemini Web Backend (gemini-3.8-flash / thinking)]
+[Client Applications]
+(Python / TypeScript / Go / Rust / cURL / Obsidian)
+                      |
+                      v  HTTP POST /v1/chat/completions
++------------------------------------------------------------------------+
+|                      Gemini Web2API Gateway Core                       |
+|                                                                        |
+|  [Ingress & Authentication]                                            |
+|    - Bearer Token Verification                                         |
+|    - OpenAI Schema Validation & Role Normalization                     |
+|                                                                        |
+|  [Long Context Preprocessing]                                          |
+|    - Lossless Whitespace & Tool Schema Compression                     |
+|    - Native Context File Attachment (<155 KB)                          |
+|                                                                        |
+|  [Traffic Control & Concurrency Schedulers]                            |
+|    - Per-IP Slot Limiter (Default 5 In-Flight, 80 RPH Google Ban Guard)|
+|    - Per-Account In-Flight Guard (Strict 1-to-1 Concurrency Isolation) |
+|                                                                        |
+|  [Upstream Engine]                                                     |
+|    - Chrome TLS / JA4 Handshake Impersonation (bogdanfinn/tls-client)   |
+|    - Dynamic BL Version Resolution                                     |
+|    - SSE Stream Parser & reasoning_content Extraction                  |
++------------------------------------------------------------------------+
+            |                                           |
+            v Direct Host Egress                        v Outbound Proxy Mesh
++-------------------------------+           +-------------------------------+
+| Direct Network Interface      |           | Egress Proxy Pool             |
+| Single IP (80 RPH Safe Limit) |           | Multi-IP Load Balancing       |
++-------------------------------+           +-------------------------------+
+            \                                           /
+             \                                         /
+              v                                       v
+         [Google Gemini Web Backend (StreamGenerate Protocol)]
 ```
 
+### 1.1 Request Processing Pipeline
+
+```mermaid
+flowchart TD
+    Req[Incoming Client Request] --> Auth{Validate Bearer Token}
+    Auth -- Invalid --> E401[Return HTTP 401 Unauthorized]
+    Auth -- Valid --> Ingest[Normalize OpenAI Messages]
+    
+    Ingest --> LengthCheck{Prompt Length}
+    LengthCheck -- "< 30 KB" --> InflightSlot[Acquire IP Concurrency Slot]
+    LengthCheck -- "30 KB - 155 KB" --> MakeDoc[Upload as Native Context File] --> InflightSlot
+    LengthCheck -- "> 155 KB" --> E400[Return HTTP 400 Context Length Exceeded]
+    
+    InflightSlot -- All IP Slots Full --> E429IP[Return HTTP 429 Rate Limit Exceeded]
+    InflightSlot -- Slot Granted --> AcctSelect[Select Account with Inflight == 0]
+    
+    AcctSelect -- All Accounts Busy --> WaitAcct{Wait up to 6s for Idle Account}
+    WaitAcct -- Timeout & FallbackAnon --> AnonReq[Route via Anonymous Session]
+    WaitAcct -- Timeout & Strict --> E429Acct[Return HTTP 429 Account Busy]
+    WaitAcct -- Account Released --> ExecReq[Execute StreamGenerate]
+    AcctSelect -- Account Granted --> ExecReq
+    
+    ExecReq --> SSETrans[Transform Chunked Protocol to SSE delta]
+    SSETrans --> RelSlot[Release IP Slot & Account Inflight]
+    RelSlot --> ClientEnd[Client Stream Complete]
+```
+
+### 1.2 Account Isolation and Zero-Logout Synchronization
+
+Standard reverse proxies frequently encounter Google account disconnections due to concurrent session collisions and conflicting background cookie refreshes. Gemini Web2API resolves this at the architecture level:
+
+```mermaid
+flowchart LR
+    subgraph Firefox Environment
+        C1[Container 1: Account A]
+        C2[Container 2: Account B]
+        C3[Container 3: Account C]
+    end
+
+    subgraph Host OS Storage
+        SQLite[(Firefox cookies.sqlite)]
+    end
+
+    subgraph Gateway Process
+        Poller[Background SQLite Reader]
+        Pool[(In-Memory Account Pool)]
+        InflightLock[Strict 1-to-1 Account Inflight Guard]
+    end
+
+    C1 -->|Legitimate Browser Refresh| SQLite
+    C2 -->|Legitimate Browser Refresh| SQLite
+    C3 -->|Legitimate Browser Refresh| SQLite
+
+    SQLite -->|Read-Only Query Every 10m| Poller
+    Poller -->|Safe Update| Pool
+    Pool --> InflightLock
+    InflightLock -->|Max 1 Request per Session| Upstream[Google Gemini Web]
+```
+
+* **No Active RotateCookies Calls**: The gateway never issues synthetic `POST accounts.google.com/RotateCookies` calls, preventing Google Token Replay Attack alerts.
+* **Strict 1-to-1 Concurrency**: Only one request is permitted per Google account session at any instant. Concurrent client requests are automatically balanced across other idle accounts or queued cleanly.
+
 ---
 
-## ✨ Flagship Innovations & Capabilities
+## 2. Core Architectural Components
 
-### 1. 🎛️ AETHER Telemetry Command Center (Apple Liquid Glass + Linear UI)
-* **Aesthetic Excellence**: Built with obsidian carbon surfaces (`#06080D`), dual specular micro-borders (`inset 0 1px 0 rgba(255, 255, 255, 0.12)`), and acrylic frosted glass (`backdrop-filter: blur(24px) saturate(180%)`).
-* **Google 80 RPH Ban Redline Gauge (Distance to Sorry Radar)**: Empirically measures the distance from Google's 80–180 RPH IP-level WAF threshold with dynamic warning states (`Safe Distance`, `Approaching Redline`, `Throttling Risk`).
-* **P50 / P95 Latency Waterfall & Throughput (Chart.js)**: Live dual-axis charts track request volume alongside median and 95th percentile generation times.
-* **Flight Log Recorder & Forensic Drawer**: Filterable high-density logs with slide-out dossier detailing First Token TTFB vs streaming duration, token counts, and upstream diagnostics.
-* **100% Offline & Air-Gapped Ready**: All Chart.js scripts and system icons are fully embedded into the single binary with zero external CDN dependencies.
-
-### 2. 🦊 Firefox Multi-Account Containers Fleet Engine (Zero-Logout)
-* **0-Click Automated Container Injection**: The backend directly injects isolated container definitions into Firefox's `containers.json`, creating colored, isolated compartments (`Gemini-01`, `Gemini-02`...) without manual setup.
-* **Hardware-Level Cookie Isolation**: By leveraging Firefox Contextual Identities, you can stay logged into 5 to 50 distinct Google accounts simultaneously on a single machine with zero session conflicts or logouts.
-* **Real-Time Login Radar**: Automatically probes the local `cookies.sqlite` every 2.5 seconds. As soon as you log into Gemini on a container tab, the dashboard lights up green (`🟢 SNlM0e Validated`) and syncs into the rotation pool.
-
-### 3. 📚 3-Tier Long Context Pipeline (Up to 1.2MB Inputs)
-* **Tier 1 (<32 KB)**: Lossless Markdown fence stripping and whitespace optimization for instant direct generation.
-* **Tier 2 (32 KB – 155 KB)**: Transparently transforms large texts into Google's native `message.txt` text attachments, boosting upstream parse efficiency by 300%.
-* **Tier 3 (>155 KB up to 1.2 MB)**: Automatically segments mammoth documents across multi-turn conversational frames, automatically purging remote history on completion.
-
-### 4. 🧠 Full Thinking Models & SSE Streaming Support
-* Complete support for `gemini-3.8-flash`, `gemini-3.8-flash-thinking`, `gemini-3.7-flash`, and `gemini-3.1-pro`.
-* **Dynamic Reasoning Drawer**: Real-time streaming separates `delta.reasoning_content` into an interactive collapsible purple-glass accordion, folding automatically when final synthesis begins.
-* **Telemetry Velocity Meter**: Live tokens-per-second (`tok/s`) and duration timers.
-
-### 5. 🛡️ Antidetect Browser Fingerprinting & Upstream Protection
-* **Chrome 146 TLS / JA4 Fingerprinting**: Accurate TLS handshake emulation avoiding Bot/WAF blocks.
-* **Per-IP Concurrency Limiter**: Restricts direct host inflight requests to safe thresholds (default 5) to prevent Google's `BardErrorInfo [1095]` empty frame rejection.
-* **Dynamic BL Version Tracking**: Automatically detects upstream Google web UI updates.
+| Component | Responsibility | Failure Remediation |
+| :--- | :--- | :--- |
+| **Ingress Engine** | Serves OpenAI `/v1/chat/completions`, `/v1/models`, and Responses endpoints. | Standardized JSON error responses (`invalid_request_error`, `rate_limit_exceeded`). |
+| **Account Fleet Manager** | Tracks account health, usage quotas, and proxies in SQLite. | Automatic circuit-breaker after 3 consecutive authentication failures. |
+| **Account In-Flight Guard** | Restricts each Google account to at most 1 concurrent streaming connection. | Queues subsequent requests up to 6 seconds; safely balances traffic. |
+| **IP Slot Limiter** | Enforces per-IP concurrency, RPM, and RPH thresholds. | Returns 429 when safe Google WAF rate boundaries are approached. |
+| **Context Preprocessor** | Strips redundant whitespace and serializes large payloads into native document attachments. | Rejects payloads exceeding 155 KB with 400 instead of risking upstream bans. |
+| **Telemetry Command Center** | Embedded administrative interface with Chart.js performance metrics. | Fully embedded in the single binary; zero CDN or external network dependencies. |
 
 ---
 
-## 🛠️ Mainstream Language Integrations
+## 3. Supported Model Matrix
 
-### 🐍 Python (OpenAI SDK with Thinking Reasoning Extraction)
+| Model Identifier | Backend Hex ID | Thinking Output | Vision / Docs | Max Tokens | Primary Use Case |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `gemini-3.8-flash` | `56fdd199312815e2` | No | Yes | 8,192 | Low latency, high throughput dialogue |
+| `gemini-3.8-flash-thinking` | `56fdd199312815e2` | Yes (`reasoning_content`) | Yes | 8,192 | Complex reasoning, chain-of-thought analysis |
+| `gemini-3.7-flash` | `fbb127bbb056c959` | No | Yes | 8,192 | General text transformation and summarization |
+| `gemini-3.5-flash-lite` | `8c46e95b1a07cecc` | No | Yes | 8,192 | Lightweight tasks, fallback execution |
+| `gemini-3.1-pro` | `e6fa609c3fa255c0` | Yes | Yes | 8,192 | Deep analytical synthesis and domain extraction |
+
+---
+
+## 4. Configuration and Runtime Parameters
+
+All runtime parameters are stored in SQLite and can be modified live through the administration interface (`http://localhost:8083/admin/`) without restarting the service.
+
+| Parameter Key | Data Type | Default | Safe Range | Description & Stability Impact |
+| :--- | :--- | :--- | :--- | :--- |
+| `per_ip_concurrent` | Integer | `5` | `1 - 10` | Maximum simultaneous requests per egress IP. Exceeding 10 triggers Google WAF blocks. |
+| `per_ip_rpm` | Integer | `30` | `10 - 60` | Maximum requests per minute per egress IP. |
+| `per_ip_rph` | Integer | `80` | `40 - 150` | Maximum requests per hour per egress IP. Lower bound of Google rate-limit threshold. |
+| `max_prompt_bytes` | Integer | `120000` | `50000 - 150000` | Maximum input prompt size in UTF-8 bytes. Payloads beyond this trigger the attachment pipeline. |
+| `context_compression` | Boolean | `true` | `true / false` | Lossless removal of redundant whitespace and repetitive prompt scaffolding. |
+| `context_file_upload` | Boolean | `true` | `true / false` | Automatically attaches large prompts (30 KB - 155 KB) as native text documents. |
+| `fallback_anon` | Boolean | `false` | `true / false` | When all accounts are busy, routes non-thinking queries anonymously to preserve availability. |
+| `impersonate` | String | `chrome_146` | TLS Profiles | Browser TLS and JA4 signature emulation profile. |
+| `gemini_bl_auto` | Boolean | `true` | `true / false` | Automatically tracks upstream Google Web build tags every 6 hours. |
+
+---
+
+## 5. Production Concurrency and Safety Guidelines
+
+Empirical stress testing under production workloads yields the following parameter configurations:
+
+| Network Topology | Active Accounts | Concurrency Slots | Safe RPM | Safe RPH | Operational Assessment |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Direct Host IP** | 1 - 5 Accounts | 3 - 5 | 15 - 25 | 60 - 80 | Recommended baseline for personal or small team usage. |
+| **Single Dedicated Proxy** | 1 - 3 Accounts | 3 - 4 | 15 - 20 | 60 - 75 | Isolates host IP; robust long-term stability. |
+| **Distributed Proxy Mesh** | 5 - 20 Accounts | 10 - 25 | 60 - 120 | 300 - 800 | High-volume deployment across distributed proxy nodes. |
+
+---
+
+## 6. Upstream Error Handling State Machine
+
+| Upstream Condition | HTTP Status | Root Cause | Automatic Gateway Action |
+| :--- | :--- | :--- | :--- |
+| `no SNlM0e in page` | 401 Unauthorized | Account session expired or logged out | Increments `fail_count`; switches to next idle account in pool. |
+| `BardErrorInfo [1095]` | 429 Too Many Requests | IP-level burst concurrency or rate limit exceeded | Marks IP slot saturated; rejects or diverts traffic to alternate proxy. |
+| `302 -> /sorry/index` | 429 Too Many Requests | Google WAF IP block (typically 80-120 minute ban) | Triggers circuit breaker on proxy node; enters cooldown state. |
+| `PromptTooLongError` | 400 Bad Request | Payload exceeds 155 KB attachment limit | Returns clear `context_length_exceeded` error; prevents bot spam. |
+| `xsrf token mismatch` | 502 Bad Gateway | Cached XSRF token stale | Automatically clears token cache and retries request immediately. |
+
+---
+
+## 7. Programming Language Integration Examples
+
+### 7.1 Python (OpenAI Official SDK)
 
 ```python
 import os
@@ -88,44 +186,42 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:8083/v1",
-    api_key=os.environ.get("GEMINI_API_KEY", "sk-gemini-YOUR-MASTER-KEY")
+    api_key=os.environ.get("GEMINI_API_KEY", "sk-gemini-master-key")
 )
 
-response = client.chat.completions.create(
+stream = client.chat.completions.create(
     model="gemini-3.8-flash-thinking",
     messages=[
-        {"role": "system", "content": "You are an elite clinical diagnostician."},
-        {"role": "user", "content": "Analyze the differential diagnosis between pediatric asthma and bronchiolitis."}
+        {"role": "system", "content": "You are a systems engineering advisor."},
+        {"role": "user", "content": "Explain the trade-offs of single-turn stateless context versus stateful server sessions."}
     ],
     temperature=0.2,
     stream=True
 )
 
-for chunk in response:
+for chunk in stream:
     delta = chunk.choices[0].delta
-    # Extract Real-Time Thinking / Reasoning Content
     if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-        print(f"\033[95m{delta.reasoning_content}\033[0m", end="", flush=True)
-    if delta.content:
+        print(f"[Thinking] {delta.reasoning_content}", end="", flush=True)
+    elif delta.content:
         print(delta.content, end="", flush=True)
+print()
 ```
 
----
-
-### 🌐 TypeScript / Node.js (with Reasoning Stream)
+### 7.2 TypeScript / Node.js
 
 ```typescript
 import OpenAI from "openai";
 
-const openai = new OpenAI({
+const client = new OpenAI({
   baseURL: "http://localhost:8083/v1",
-  apiKey: process.env.GEMINI_API_KEY || "sk-gemini-YOUR-MASTER-KEY",
+  apiKey: process.env.GEMINI_API_KEY || "sk-gemini-master-key",
 });
 
 async function main() {
-  const stream = await openai.chat.completions.create({
+  const stream = await client.chat.completions.create({
     model: "gemini-3.8-flash-thinking",
-    messages: [{ role: "user", content: "Summarize modern async architectures in 3 bullet points." }],
+    messages: [{ role: "user", content: "Summarize the ACID properties of relational databases." }],
     stream: true,
   });
 
@@ -133,8 +229,7 @@ async function main() {
     const delta = chunk.choices[0]?.delta as any;
     if (delta?.reasoning_content) {
       process.stdout.write(`\x1b[35m${delta.reasoning_content}\x1b[0m`);
-    }
-    if (delta?.content) {
+    } else if (delta?.content) {
       process.stdout.write(delta.content);
     }
   }
@@ -143,135 +238,114 @@ async function main() {
 main().catch(console.error);
 ```
 
----
-
-### 🐹 Go
+### 7.3 Go (Standard Library Only)
 
 ```go
 package main
 
 import (
-	"context"
-	"fmt"
+	"bytes"
+	"encoding/json"
 	"io"
-
-	openai "github.com/sashabaranov/go-openai"
+	"net/http"
+	"os"
 )
 
 func main() {
-	config := openai.DefaultConfig("sk-gemini-YOUR-MASTER-KEY")
-	config.BaseURL = "http://localhost:8083/v1"
-	client := openai.NewClientWithConfig(config)
-
-	req := openai.ChatCompletionRequest{
-		Model: "gemini-3.8-flash",
-		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleUser, Content: "Explain the internal structure of Go channels."},
+	payload := map[string]interface{}{
+		"model": "gemini-3.8-flash",
+		"messages": []map[string]string{
+			{"role": "user", "content": "Output a verified Go concurrency worker pool implementation."},
 		},
-		Stream: true,
+		"stream": false,
 	}
+	body, _ := json.Marshal(payload)
 
-	stream, err := client.CreateChatCompletionStream(context.Background(), req)
+	req, _ := http.NewRequest("POST", "http://localhost:8083/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-gemini-master-key")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		panic(err)
 	}
-	defer stream.Close()
+	defer resp.Body.Close()
 
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			panic(err)
-		}
-		fmt.Print(resp.Choices[0].Delta.Content)
-	}
+	io.Copy(os.Stdout, resp.Body)
 }
 ```
 
----
-
-### 🦀 Rust (Modern Reqwest)
+### 7.4 Rust (reqwest + tokio)
 
 ```rust
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
-    let body = json!({
-        "model": "gemini-3.8-flash",
-        "messages": [{"role": "user", "content": "Compose a poem on asynchronous network pipelines."}],
-        "temperature": 0.2
-    });
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer sk-gemini-master-key"));
 
-    let res = client.post("http://localhost:8083/v1/chat/completions")
-        .bearer_auth("sk-gemini-YOUR-MASTER-KEY")
-        .json(&body)
+    let client = reqwest::Client::new();
+    let res = client
+        .post("http://localhost:8083/v1/chat/completions")
+        .headers(headers)
+        .json(&json!({
+            "model": "gemini-3.8-flash",
+            "messages": [{"role": "user", "content": "Explain zero-copy deserialization in Rust."}],
+            "stream": false
+        }))
         .send()
-        .await?
-        .json::<serde_json::Value>()
         .await?;
 
-    println!("{}", res["choices"][0]["message"]["content"].as_str().unwrap_or(""));
+    let text = res.text().await?;
+    println!("{}", text);
     Ok(())
 }
 ```
 
-    println!("{}", res["choices"][0]["message"]["content"].as_str().unwrap_or(""));
-    Ok(())
-}
-```
-
----
-
-### 💻 cURL
+### 7.5 cURL
 
 ```bash
 curl -X POST http://localhost:8083/v1/chat/completions \
-  -H "Authorization: Bearer sk-gemini-YOUR-MASTER-KEY" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-gemini-master-key" \
   -d '{
     "model": "gemini-3.8-flash",
-    "messages": [{"role": "user", "content": "Verify end-to-end telemetry pipeline."}],
-    "temperature": 0.1
+    "messages": [{"role": "user", "content": "Write a POSIX compliant shell script template."}],
+    "stream": true
   }'
 ```
 
----
+### 7.6 Obsidian (Smart Connections & Copilot)
 
-### 🔮 Obsidian (Smart Connections / Copilot)
-
-1. Open Obsidian **Settings** ➔ Navigate to **Smart Connections** or **Copilot**.
-2. **Custom OpenAI API Endpoint**: `http://localhost:8083/v1`
-3. **API Key**: `sk-gemini-YOUR-MASTER-KEY`
-4. **Model Name**: `gemini-3.8-flash` or `gemini-3.8-flash-thinking`.
-5. Enjoy unlimited, private AI research directly inside your local knowledge vault!
+1. Open Obsidian Settings and select **Smart Connections** or **Copilot**.
+2. Configure **Custom OpenAI API Endpoint**: `http://localhost:8083/v1`
+3. Configure **API Key**: `sk-gemini-master-key` (or matching `--admin-token` / configured key).
+4. Configure **Model Identifier**: `gemini-3.8-flash` or `gemini-3.8-flash-thinking`.
 
 ---
 
-## ⚡ Quickstart Guide
+## 8. Deployment Options
 
-### Option 1: Single Binary Run (Recommended)
+### 8.1 Single Binary (Recommended)
 
 ```bash
-# 1. Build or download the binary
+# 1. Compile binary
 go build -o gemini-web2api-go main.go
 
-# 2. Launch server (Specify port & admin token)
+# 2. Launch gateway server
 ./gemini-web2api-go --port 8083 --admin-token YOUR-ADMIN-PASSWORD
 ```
 
-Open [`http://localhost:8083/admin/`](http://localhost:8083/admin/) in your browser to enter the AETHER Mission Control!
+Access the administration dashboard at `http://localhost:8083/admin/`.
 
----
-
-### Option 2: Docker Deployment
+### 8.2 Docker Container
 
 ```bash
 docker run -d \
-  --name aether-gateway \
+  --name gemini-web2api \
   -p 8083:8083 \
   -v $(pwd)/data:/app/data \
   -e ADMIN_TOKEN=YOUR-ADMIN-PASSWORD \
@@ -281,18 +355,19 @@ docker run -d \
 
 ---
 
-## 📋 Recommended Production Settings
+## 9. CLI Flags and Options
 
-Empirical benchmarking on large medical probe extraction workloads:
-
-| Environment | Concurrency (`-c`) | Batch Size (`-b`) | Operational Notes |
-| :---: | :---: | :---: | :--- |
-| **Direct Host IP (1–5 accounts)** | **3 ~ 4** | **2 ~ 3** | **⭐ Golden Ratio**. Prompts remain under 15k chars, guaranteeing zero 1095 empty-frame errors and instantaneous response. |
-| **Egress Proxy Mesh (5+ proxies)** | **10 ~ 25** | **3** | High-throughput distributed scraping with linear scaling. |
+| CLI Flag | Environment Variable | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--port` | `PORT` | `8083` | HTTP listening port for gateway and admin UI. |
+| `--admin-token` | `ADMIN_TOKEN` | Generated | Master authentication token for administration API and client requests. |
+| `--db` | `DATABASE_URL` | `sqlite://data/gemini.db` | Storage path for SQLite or connection string for PostgreSQL / MySQL. |
+| `--cookie-file` | `COOKIE_FILE` | (Optional) | Path to raw Netscape or JSON cookie export for auto-seeding accounts. |
+| `--proxy` | `PROXY_URL` | (Optional) | Static upstream proxy fallback URL. |
 
 ---
 
-## 📄 License
+## 10. License
 
-Distributed under the **MIT License**.  
-For academic research, personal knowledge bases, and local development. Please comply with Google's Terms of Service.
+Distributed under the MIT License.
+For research, local application development, and personal knowledge systems. Ensure compliance with Google Terms of Service.
