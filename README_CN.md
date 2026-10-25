@@ -6,6 +6,34 @@
 
 ---
 
+## 这是什么项目？
+
+通俗来说：**这个项目让你能够将 Google 网页版 Gemini，当成完全免费且不限量的 OpenAI API 接口来使用。**
+
+通常情况下，要想在各种客户端软件（如 NextChat、LobeChat、Cherry Studio、Dify、Obsidian）或自己编写的 Python 脚本中使用 AI，往往需要购买官方 API Key 并绑定信用卡按量付费。而 Google 官方的网页版 Gemini（gemini.google.com）虽然免费开放，却不提供任何可供第三方程序调用的开放接口。
+
+**Gemini Free API 就是连接这两者的桥梁：**
+1. 它在你的本地电脑或服务器后台运行，提供一个标准的 OpenAI API 接口（`http://localhost:8083/v1`）。
+2. 当你的软件（Python、NextChat、Cherry Studio、Obsidian 等）向它提问时，它在后台自动将请求转发给 Google 网页版。
+3. 它将网页版的回复实时包装成标准的 OpenAI 流式数据格式返回给你的客户端。
+
+整个过程**不需要任何 Google 官方 API Key、不需要绑定信用卡、完全免费**，并且完整支持模型思考链（Thinking）与图片/文档多模态分析。
+
+```
+[你常用的软件] (NextChat / Obsidian / Python / One-API)
+        |
+        v 发送标准 OpenAI 格式请求 (http://localhost:8083/v1)
+[Gemini Free API 网关] (运行在你的本地电脑或服务器)
+        |
+        v 后台安全代理
+[Google Gemini 网页端] (完全免费的 Google 账号会话)
+        |
+        v 实时流式返回
+[你的软件无缝显示 AI 答案]
+```
+
+---
+
 ## 1. 核心特性与能力
 
 * **完全免费且免 API Key**：告别 Google Cloud 昂贵的计费阶梯，通过网页端反向代理直接获取 Gemini 核心能力。

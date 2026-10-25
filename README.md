@@ -6,6 +6,34 @@
 
 ---
 
+## What is Gemini Free API?
+
+In plain terms: **This tool lets you use Google Gemini's free web interface just like a paid, standard OpenAI API — completely free of charge.**
+
+Normally, connecting AI to your favorite tools (like NextChat, LobeChat, Cherry Studio, Dify, Obsidian, or custom Python scripts) requires an official API key from OpenAI or Google Cloud, which demands credit cards, billing accounts, and per-token fees. On the other hand, Google's web chat (gemini.google.com) is free to use, but lacks an open API for third-party software.
+
+**Gemini Free API bridges that gap:**
+1. It runs silently on your local computer or server, exposing a standard OpenAI-compatible API endpoint (`http://localhost:8083/v1`).
+2. When your app sends a standard chat prompt, this gateway forwards it to Google Gemini Web in the background.
+3. It converts the incoming response into standard OpenAI streaming format (`/v1/chat/completions`) and delivers it back to your app in real-time.
+
+**Zero Google Cloud setup, zero credit cards, zero API fees.** You get access to Gemini 3.8 Flash, complex thinking reasoning streams, and vision/document inputs through any OpenAI-compatible client.
+
+```
+[Your Favorite Apps] (NextChat / Obsidian / Python / One-API)
+         |
+         v Standard OpenAI Request (http://localhost:8083/v1)
+[Gemini Free API Gateway] (Runs on your machine / server)
+         |
+         v Automated Web Proxy
+[Google Gemini Web] (Free Google Account Session)
+         |
+         v Smooth Streaming Response
+[AI Answers Rendered in Your App]
+```
+
+---
+
 ## 1. Overview & Key Capabilities
 
 * **100% Free & No API Key**: Replaces costly official Gemini API subscriptions with self-hosted web reverse proxying.

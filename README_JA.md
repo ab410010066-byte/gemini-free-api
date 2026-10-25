@@ -6,6 +6,34 @@
 
 ---
 
+## このプロジェクトについて
+
+分かりやすく言うと：**このプロジェクトは、無料の Google Gemini Web 版を、有料の OpenAI API とまったく同じように使えるようにするツールです。**
+
+通常、NextChat、LobeChat、Cherry Studio、Dify、Obsidian や Python スクリプトなどのアプリで AI を利用するには、OpenAI や Google Cloud で API キーを発行し、クレジットカードを登録して従量課金を支払う必要があります。一方、Google の Web 版 Gemini (gemini.google.com) は無料で利用できますが、外部アプリから接続できる API 形式が提供されていません。
+
+**Gemini Free API はその架け橋となります：**
+1. ローカル PC やサーバー上で静かに動作し、標準的な OpenAI 互換のエンドポイント (`http://localhost:8083/v1`) を提供します。
+2. アプリが通常の質問を送信すると、本ゲートウェイが裏側で自動的に Google Gemini Web へリクエストを中継します。
+3. 返ってきた回答をリアルタイムに OpenAI 標準のストリーミング形式に変換してアプリへ返却します。
+
+**Google Cloud アカウントの登録やクレジットカードは一切不要で、完全無料**。Gemini 3.8 Flash、思考プロセス (Thinking) のストリーミング、画像やドキュメントの解析まで、あらゆる OpenAI 互換アプリから直接利用可能です。
+
+```
+[普段お使いのアプリ] (NextChat / Obsidian / Python / One-API)
+        |
+        v 標準的な OpenAI 形式リクエスト (http://localhost:8083/v1)
+[Gemini Free API ゲートウェイ] (ローカル PC またはサーバー上で常駐)
+        |
+        v バックグラウンド自動中継
+[Google Gemini Web] (完全無料の Google アカウントセッション)
+        |
+        v スムーズなリアルタイムストリーミング
+[アプリ上で AI の回答が快適に表示]
+```
+
+---
+
 ## 1. コア機能と特徴
 
 * **完全無料かつ API キー不要**: Google Cloud の課金体系を回避し、Web 版リバースプロキシを通じて Gemini の能力を直接活用可能。
