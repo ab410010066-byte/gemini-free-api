@@ -24,7 +24,11 @@ func handleAdminUI(w http.ResponseWriter, r *http.Request) {
 	// 按请求路径展开成绝对路径，正好毁掉这一点。
 	path := r.URL.Path
 	if path == "/admin" {
-		w.Header().Set("Location", "admin/")
+		loc := "admin/"
+		if r.URL.RawQuery != "" {
+			loc += "?" + r.URL.RawQuery
+		}
+		w.Header().Set("Location", loc)
 		w.WriteHeader(http.StatusMovedPermanently)
 		return
 	}

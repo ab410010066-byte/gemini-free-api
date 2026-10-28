@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -27,47 +28,96 @@ type FirefoxContainerAccount struct {
 
 // findFirefoxCookiesDB 寻找本地 Firefox 配置目录中的 cookies.sqlite
 func findFirefoxCookiesDB() (string, error) {
+	if custom := os.Getenv("FIREFOX_COOKIES_DB"); custom != "" {
+		if fi, err := os.Stat(custom); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			return custom, nil
+		}
+	}
+
+	// 优先检查本地 data 目录（免疫 macOS launchd TCC 隐私限制）
+	localCandidates := []string{
+		filepath.Join("data", "firefox_cookies.sqlite"),
+		filepath.Join(".", "firefox_cookies.sqlite"),
+	}
+	for _, lc := range localCandidates {
+		if fi, err := os.Stat(lc); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			logf("[firefox] using local data cookie DB: %s", lc)
+			return lc, nil
+		}
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 
-	var patterns []string
+	var ffDirs []string
 	switch runtime.GOOS {
 	case "darwin":
-		patterns = []string{
-			filepath.Join(home, "Library", "Application Support", "Firefox", "Profiles", "*.default-release", "cookies.sqlite"),
-			filepath.Join(home, "Library", "Application Support", "Firefox", "Profiles", "*.default*", "cookies.sqlite"),
-			filepath.Join(home, "Library", "Application Support", "Firefox", "Profiles", "*", "cookies.sqlite"),
-		}
-	case "linux":
-		patterns = []string{
-			filepath.Join(home, ".mozilla", "firefox", "*.default-release", "cookies.sqlite"),
-			filepath.Join(home, ".mozilla", "firefox", "*.default*", "cookies.sqlite"),
-			filepath.Join(home, ".mozilla", "firefox", "*", "cookies.sqlite"),
+		ffDirs = []string{
+			filepath.Join(home, "Library", "Application Support", "Firefox"),
 		}
 	case "windows":
 		appdata := os.Getenv("APPDATA")
 		if appdata == "" {
 			appdata = filepath.Join(home, "AppData", "Roaming")
 		}
-		patterns = []string{
-			filepath.Join(appdata, "Mozilla", "Firefox", "Profiles", "*.default-release", "cookies.sqlite"),
-			filepath.Join(appdata, "Mozilla", "Firefox", "Profiles", "*", "cookies.sqlite"),
+		ffDirs = []string{
+			filepath.Join(appdata, "Mozilla", "Firefox"),
 		}
 	default:
-		patterns = []string{
-			filepath.Join(home, ".mozilla", "firefox", "*.default*", "cookies.sqlite"),
+		ffDirs = []string{
+			filepath.Join(home, ".mozilla", "firefox"),
 		}
 	}
 
-	for _, p := range patterns {
-		matches, err := filepath.Glob(p)
-		if err == nil && len(matches) > 0 {
-			for _, m := range matches {
-				if fi, err := os.Stat(m); err == nil && !fi.IsDir() {
-					return m, nil
+	for _, ffDir := range ffDirs {
+		// 1. 优先解析 profiles.ini 锁定当前正在使用的 Default Profile
+		iniPath := filepath.Join(ffDir, "profiles.ini")
+		if f, err := os.Open(iniPath); err == nil {
+			var candidates []string
+			scanner := bufio.NewScanner(f)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if strings.HasPrefix(line, "Path=") {
+					p := strings.TrimPrefix(line, "Path=")
+					candidates = append(candidates, filepath.Join(ffDir, p, "cookies.sqlite"))
+				} else if strings.HasPrefix(line, "Default=") {
+					p := strings.TrimPrefix(line, "Default=")
+					candidates = append([]string{filepath.Join(ffDir, p, "cookies.sqlite")}, candidates...)
 				}
+			}
+			f.Close()
+			for _, c := range candidates {
+				if fi, err := os.Stat(c); err == nil && !fi.IsDir() && fi.Size() > 0 {
+					return c, nil
+				}
+			}
+		}
+
+		// 2. 扫描 Profiles 目录实体（解决 macOS Glob 对空格或子目录匹配失败的问题）
+		profilesDir := filepath.Join(ffDir, "Profiles")
+		if entries, err := os.ReadDir(profilesDir); err == nil {
+			var releaseCandidates []string
+			var otherCandidates []string
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				cPath := filepath.Join(profilesDir, e.Name(), "cookies.sqlite")
+				if fi, err := os.Stat(cPath); err == nil && !fi.IsDir() && fi.Size() > 0 {
+					if strings.Contains(e.Name(), "default-release") {
+						releaseCandidates = append(releaseCandidates, cPath)
+					} else {
+						otherCandidates = append(otherCandidates, cPath)
+					}
+				}
+			}
+			if len(releaseCandidates) > 0 {
+				return releaseCandidates[0], nil
+			}
+			if len(otherCandidates) > 0 {
+				return otherCandidates[0], nil
 			}
 		}
 	}
@@ -185,11 +235,7 @@ func readFirefoxGoogleCookies() ([]FirefoxContainerAccount, error) {
 		if m := cidRe.FindStringSubmatch(attr); len(m) > 1 {
 			cid, _ = strconv.Atoi(m[1])
 		}
-		if cid == 0 {
-			continue // 忽略未隔离的默认容器，只同步 Multi-Account Containers 隔离环境中的各 Google 账号
-		}
-
-		name := "firefox-default"
+		name := "Firefox 主環境 (Default)"
 		if cid > 0 {
 			if cName, exists := containerNames[cid]; exists && cName != "" {
 				name = cName

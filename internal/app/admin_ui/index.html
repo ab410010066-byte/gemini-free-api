@@ -1110,12 +1110,47 @@ main {
 </style>
 </head>
 <body>
-<div id="app"></div>
+<div id="app">
+  <div class="login-backdrop">
+    <div class="login-card" style="text-align:center;padding:48px 24px">
+      <div class="brand-orb" style="margin: 0 auto 16px auto; width: 44px; height: 44px;">
+        <svg viewBox="0 0 24 24" style="width: 24px; height: 24px;"><path d="M12 2L9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5z"/></svg>
+      </div>
+      <h1 style="font-size:20px;font-weight:700;letter-spacing:1px;margin-bottom:8px">AETHER CONTROL</h1>
+      <p style="color:var(--text-muted);font-size:12.5px;margin-bottom:24px">正在連線至本地閘道遙測中樞...</p>
+      <div style="display:flex;justify-content:center"><div class="pulse-orb" style="width:12px;height:12px"></div></div>
+    </div>
+  </div>
+</div>
 <div id="toastContainer"></div>
 <div class="ambient-glow"></div>
 <div class="ambient-glow-2"></div>
 
 <script>
+/* ─── SAFE STORAGE WRAPPER (FIREFOX SECURITYERROR IMMUNITY) ──────────────── */
+const storage = {
+  _mem: {},
+  get(k, def = null) {
+    try {
+      const v = window.localStorage.getItem(k);
+      return v !== null ? v : (this._mem[k] !== undefined ? this._mem[k] : def);
+    } catch (e) {
+      return this._mem[k] !== undefined ? this._mem[k] : def;
+    }
+  },
+  set(k, v) {
+    try {
+      window.localStorage.setItem(k, v);
+    } catch (e) {}
+    this._mem[k] = v;
+  },
+  remove(k) {
+    try {
+      window.localStorage.removeItem(k);
+    } catch (e) {}
+    delete this._mem[k];
+  }
+};
 /* ─── SYSTEM ICONS ───────────────────────────────────────────────────────── */
 const ICONS = {
   dashboard: '<path d="M4 13h6c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v8c0 .55.45 1 1 1zm0 8h6c.55 0 1-.45 1-1v-4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1zm10 0h6c.55 0 1-.45 1-1v-8c0-.55-.45-1-1-1h-6c-.55 0-1 .45-1 1v8c0 .55.45 1 1 1zm0-18v4c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1h-6c-.55 0-1 .45-1 1z"/>',
@@ -1152,7 +1187,7 @@ const NAV_ITEMS = [
 
 /* ─── API & NETWORK LAYER ─────────────────────────────────────────────────── */
 const api = async (path, opts = {}) => {
-  const token = localStorage.getItem('admin_token') || '';
+  const token = storage.get('admin_token', '');
   const headers = {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
@@ -1164,7 +1199,7 @@ const api = async (path, opts = {}) => {
     headers
   });
   if (r.status === 401) {
-    localStorage.removeItem('admin_token');
+    storage.remove('admin_token');
     renderLogin();
     throw new Error('unauthorized');
   }
@@ -1350,9 +1385,9 @@ const destroyCharts = () => {
 
 /* ─── SHELL RENDERER ─────────────────────────────────────────────────────── */
 function renderShell() {
-  const theme = localStorage.getItem('theme') || 'dark';
+  const theme = storage.get('theme', 'dark');
   document.documentElement.setAttribute('data-theme', theme);
-  const collapsed = localStorage.getItem('sbCollapsed') === '1';
+  const collapsed = storage.get('sbCollapsed') === '1';
 
   document.getElementById('app').innerHTML = `
     <aside class="sidebar ${collapsed ? 'collapsed' : ''}" id="mainSidebar">
@@ -1455,14 +1490,14 @@ function toggleSidebar() {
   const sb = document.getElementById('mainSidebar');
   if (!sb) return;
   sb.classList.toggle('collapsed');
-  localStorage.setItem('sbCollapsed', sb.classList.contains('collapsed') ? '1' : '0');
+  storage.set('sbCollapsed', sb.classList.contains('collapsed') ? '1' : '0');
 }
 
 function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
   const next = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('theme', next);
+  storage.set('theme', next);
   const icon = document.getElementById('themeIcon');
   if (icon) icon.innerHTML = next === 'dark' ? ICONS.sun : ICONS.moon;
   toast(`已切換為 ${next === 'dark' ? '深色夜空' : '明亮極光'} 模式`);
@@ -1471,7 +1506,7 @@ function toggleTheme() {
 
 async function loadGlobalTelemetry() {
   try {
-    const token = localStorage.getItem('admin_token') || '';
+    const token = storage.get('admin_token', '');
     const authHeaders = token ? { 'Authorization': `Bearer ${token}` } : {};
     const [root, usage, cookies] = await Promise.all([
       fetch('../', { credentials: 'include', headers: authHeaders }).then(r => r.json()).catch(() => null),
@@ -2004,7 +2039,7 @@ const PAGE_RENDERERS = {
   cookies: async (container) => {
     const data = await api('api/cookies').catch(() => ({ items: [], total: 0, enabled: 0 }));
     const accounts = data.items || [];
-    const viewMode = localStorage.getItem('cookieViewMode') || 'cards';
+    const viewMode = storage.get('cookieViewMode', 'cards');
 
     container.innerHTML = `
       <!-- TOP ACTION BAR -->
@@ -2829,7 +2864,7 @@ function closeDrawer(e) {
 
 /* ─── FLEET VIEWS (DUAL VIEW: CARDS VS TABLE) ────────────────────────────── */
 function setCookieViewMode(mode) {
-  localStorage.setItem('cookieViewMode', mode);
+  storage.set('cookieViewMode', mode);
   refreshCurrentPage();
 }
 
@@ -4084,7 +4119,7 @@ async function doLogin(e) {
       body: JSON.stringify({ token: pwd })
     });
     if (res.ok) {
-      localStorage.setItem('admin_token', pwd);
+      storage.set('admin_token', pwd);
       toast('認證成功，正在載入遙測中樞', 'success');
       renderShell();
     } else {
@@ -4100,27 +4135,38 @@ async function doLogout() {
   try {
     await api('api/logout', { method: 'POST' });
   } catch (e) {}
-  localStorage.removeItem('admin_token');
+  storage.remove('admin_token');
   renderLogin();
 }
 
 /* ─── INITIALIZATION BOOTSTRAP ────────────────────────────────────────────── */
 (async () => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const qToken = urlParams.get('token');
-  if (qToken) {
-    localStorage.setItem('admin_token', qToken);
-  }
-  const token = localStorage.getItem('admin_token') || '';
   try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const qToken = urlParams.get('token');
+    if (qToken) {
+      storage.set('admin_token', qToken);
+    }
+    const token = storage.get('admin_token', '');
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-    const r = await fetch('api/stats?hours=1', { credentials: 'include', headers });
-    if (r.ok) {
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+
+    const r = await fetch('api/stats?hours=1', {
+      credentials: 'include',
+      headers,
+      signal: controller.signal
+    }).catch(() => null);
+    clearTimeout(timeout);
+
+    if (r && r.ok) {
       renderShell();
     } else {
       renderLogin();
     }
   } catch (e) {
+    console.warn('Bootstrap auth check error:', e);
     renderLogin();
   }
 })();
