@@ -1152,12 +1152,19 @@ const NAV_ITEMS = [
 
 /* ─── API & NETWORK LAYER ─────────────────────────────────────────────────── */
 const api = async (path, opts = {}) => {
+  const token = localStorage.getItem('admin_token') || '';
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    ...(opts.headers || {})
+  };
   const r = await fetch(path, {
     credentials: 'include',
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+    headers
   });
   if (r.status === 401) {
+    localStorage.removeItem('admin_token');
     renderLogin();
     throw new Error('unauthorized');
   }
@@ -1464,8 +1471,10 @@ function toggleTheme() {
 
 async function loadGlobalTelemetry() {
   try {
+    const token = localStorage.getItem('admin_token') || '';
+    const authHeaders = token ? { 'Authorization': `Bearer ${token}` } : {};
     const [root, usage, cookies] = await Promise.all([
-      fetch('../').then(r => r.json()).catch(() => null),
+      fetch('../', { credentials: 'include', headers: authHeaders }).then(r => r.json()).catch(() => null),
       api('api/usage').catch(() => null),
       api('api/cookies').catch(() => null)
     ]);
@@ -4066,18 +4075,20 @@ function renderLogin() {
 
 async function doLogin(e) {
   e.preventDefault();
-  const pwd = document.getElementById('adminPwdInput')?.value || '';
+  const pwd = document.getElementById('adminPwdInput')?.value?.trim() || '';
   try {
     const res = await fetch('api/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: pwd })
     });
     if (res.ok) {
+      localStorage.setItem('admin_token', pwd);
       toast('認證成功，正在載入遙測中樞', 'success');
       renderShell();
     } else {
-      toast('管理員 Token 錯誤', 'error');
+      toast('管理員 Token 錯誤，請確認密碼是否與啟動參數一致', 'error');
     }
   } catch (err) {
     toast('登入失敗: ' + err.message, 'error');
@@ -4089,13 +4100,21 @@ async function doLogout() {
   try {
     await api('api/logout', { method: 'POST' });
   } catch (e) {}
+  localStorage.removeItem('admin_token');
   renderLogin();
 }
 
 /* ─── INITIALIZATION BOOTSTRAP ────────────────────────────────────────────── */
 (async () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const qToken = urlParams.get('token');
+  if (qToken) {
+    localStorage.setItem('admin_token', qToken);
+  }
+  const token = localStorage.getItem('admin_token') || '';
   try {
-    const r = await fetch('api/stats?hours=1', { credentials: 'include' });
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const r = await fetch('api/stats?hours=1', { credentials: 'include', headers });
     if (r.ok) {
       renderShell();
     } else {
