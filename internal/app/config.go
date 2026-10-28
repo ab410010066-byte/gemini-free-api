@@ -80,7 +80,7 @@ func defaultConfig() Config {
 		// 实测被拦的出口 106-121 分钟自动恢复，冷却取 120 分钟。
 		ProxyCooldownMin: 120,
 		FallbackDirect:   false,
-		FallbackAnon:     false,
+		FallbackAnon:     true,
 		GeminiBLAuto:     true,
 		// 实测上游的墙在约 13 万 UTF-8 字节：129,950 字节中英文各 3/3 过，
 		// 135,990 字节各 1/3，141,920 字节各 1/3。取 128000 留一点余量。

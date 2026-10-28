@@ -26,26 +26,8 @@ type FirefoxContainerAccount struct {
 	SAPISID       string
 }
 
-// findFirefoxCookiesDB 寻找本地 Firefox 配置目录中的 cookies.sqlite
-func findFirefoxCookiesDB() (string, error) {
-	if custom := os.Getenv("FIREFOX_COOKIES_DB"); custom != "" {
-		if fi, err := os.Stat(custom); err == nil && !fi.IsDir() && fi.Size() > 0 {
-			return custom, nil
-		}
-	}
-
-	// 优先检查本地 data 目录（免疫 macOS launchd TCC 隐私限制）
-	localCandidates := []string{
-		filepath.Join("data", "firefox_cookies.sqlite"),
-		filepath.Join(".", "firefox_cookies.sqlite"),
-	}
-	for _, lc := range localCandidates {
-		if fi, err := os.Stat(lc); err == nil && !fi.IsDir() && fi.Size() > 0 {
-			logf("[firefox] using local data cookie DB: %s", lc)
-			return lc, nil
-		}
-	}
-
+// findFirefoxProfileDir 寻找本地 Firefox 配置目录实体
+func findFirefoxProfileDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -81,21 +63,21 @@ func findFirefoxCookiesDB() (string, error) {
 				line := strings.TrimSpace(scanner.Text())
 				if strings.HasPrefix(line, "Path=") {
 					p := strings.TrimPrefix(line, "Path=")
-					candidates = append(candidates, filepath.Join(ffDir, p, "cookies.sqlite"))
+					candidates = append(candidates, filepath.Join(ffDir, p))
 				} else if strings.HasPrefix(line, "Default=") {
 					p := strings.TrimPrefix(line, "Default=")
-					candidates = append([]string{filepath.Join(ffDir, p, "cookies.sqlite")}, candidates...)
+					candidates = append([]string{filepath.Join(ffDir, p)}, candidates...)
 				}
 			}
 			f.Close()
 			for _, c := range candidates {
-				if fi, err := os.Stat(c); err == nil && !fi.IsDir() && fi.Size() > 0 {
+				if fi, err := os.Stat(c); err == nil && fi.IsDir() {
 					return c, nil
 				}
 			}
 		}
 
-		// 2. 扫描 Profiles 目录实体（解决 macOS Glob 对空格或子目录匹配失败的问题）
+		// 2. 扫描 Profiles 目录实体
 		profilesDir := filepath.Join(ffDir, "Profiles")
 		if entries, err := os.ReadDir(profilesDir); err == nil {
 			var releaseCandidates []string
@@ -104,13 +86,11 @@ func findFirefoxCookiesDB() (string, error) {
 				if !e.IsDir() {
 					continue
 				}
-				cPath := filepath.Join(profilesDir, e.Name(), "cookies.sqlite")
-				if fi, err := os.Stat(cPath); err == nil && !fi.IsDir() && fi.Size() > 0 {
-					if strings.Contains(e.Name(), "default-release") {
-						releaseCandidates = append(releaseCandidates, cPath)
-					} else {
-						otherCandidates = append(otherCandidates, cPath)
-					}
+				pDir := filepath.Join(profilesDir, e.Name())
+				if strings.Contains(e.Name(), "default-release") {
+					releaseCandidates = append(releaseCandidates, pDir)
+				} else {
+					otherCandidates = append(otherCandidates, pDir)
 				}
 			}
 			if len(releaseCandidates) > 0 {
@@ -119,6 +99,36 @@ func findFirefoxCookiesDB() (string, error) {
 			if len(otherCandidates) > 0 {
 				return otherCandidates[0], nil
 			}
+		}
+	}
+
+	return "", fmt.Errorf("未找到本地 Firefox 配置文件目录")
+}
+
+// findFirefoxCookiesDB 寻找本地 Firefox 配置目录中的 cookies.sqlite
+func findFirefoxCookiesDB() (string, error) {
+	if custom := os.Getenv("FIREFOX_COOKIES_DB"); custom != "" {
+		if fi, err := os.Stat(custom); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			return custom, nil
+		}
+	}
+
+	// 优先检查本地 data 目录（免疫 macOS launchd TCC 隐私限制）
+	localCandidates := []string{
+		filepath.Join("data", "firefox_cookies.sqlite"),
+		filepath.Join(".", "firefox_cookies.sqlite"),
+	}
+	for _, lc := range localCandidates {
+		if fi, err := os.Stat(lc); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			logf("[firefox] using local data cookie DB: %s", lc)
+			return lc, nil
+		}
+	}
+
+	if profDir, err := findFirefoxProfileDir(); err == nil {
+		cPath := filepath.Join(profDir, "cookies.sqlite")
+		if fi, err := os.Stat(cPath); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			return cPath, nil
 		}
 	}
 
@@ -228,8 +238,9 @@ func readFirefoxGoogleCookies() ([]FirefoxContainerAccount, error) {
 
 	for attr, cmap := range groups {
 		sapisid, ok := cmap["SAPISID"]
-		if !ok || sapisid == "" {
-			continue // 未登录 Google 的容器跳过
+		psid, hasPsid := cmap["__Secure-1PSID"]
+		if !ok || sapisid == "" || !hasPsid || psid == "" {
+			continue // 未完整登录 Google 的容器跳过（必须包含 SAPISID 和 __Secure-1PSID）
 		}
 		cid := 0
 		if m := cidRe.FindStringSubmatch(attr); len(m) > 1 {
@@ -341,11 +352,14 @@ func AutoCreateFirefoxContainers(count int, prefix string) ([]string, error) {
 		prefix = "Gemini"
 	}
 
-	dbPath, err := findFirefoxCookiesDB()
+	profDir, err := findFirefoxProfileDir()
 	if err != nil {
-		return nil, fmt.Errorf("找不到本地 Firefox 配置目录: %w", err)
+		dbPath, dberr := findFirefoxCookiesDB()
+		if dberr != nil {
+			return nil, fmt.Errorf("找不到本地 Firefox 配置目录: %w", err)
+		}
+		profDir = filepath.Dir(dbPath)
 	}
-	profDir := filepath.Dir(dbPath)
 	cPath := filepath.Join(profDir, "containers.json")
 
 	var cf FirefoxContainersFile
@@ -405,12 +419,20 @@ func AutoCreateFirefoxContainers(count int, prefix string) ([]string, error) {
 
 // GetFirefoxContainersStatus 返回当前本地 Firefox 容器列表及其 Google 登录态探针
 func GetFirefoxContainersStatus() (map[string]interface{}, error) {
+	profDir, err := findFirefoxProfileDir()
+	if err != nil {
+		dbPath, dberr := findFirefoxCookiesDB()
+		if dberr != nil {
+			return nil, fmt.Errorf("未检测到本地 Firefox: %w", err)
+		}
+		profDir = filepath.Dir(dbPath)
+	}
+	cPath := filepath.Join(profDir, "containers.json")
+
 	dbPath, err := findFirefoxCookiesDB()
 	if err != nil {
-		return nil, fmt.Errorf("未检测到本地 Firefox: %w", err)
+		return nil, fmt.Errorf("未检测到本地 Firefox Cookie 数据库: %w", err)
 	}
-	profDir := filepath.Dir(dbPath)
-	cPath := filepath.Join(profDir, "containers.json")
 
 	var cf FirefoxContainersFile
 	data, err := os.ReadFile(cPath)
