@@ -3,6 +3,7 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 SYNC_SCRIPT="$DIR/sync_firefox.sh"
 FF_DIR="$HOME/Library/Application Support/Firefox"
+ADMIN_TOKEN="${ADMIN_TOKEN:-$1}"
 LAST_MTIME=0
 
 # Locate profile
@@ -30,7 +31,11 @@ while true; do
         CURRENT_MTIME=$(stat -f "%m" "$FF_DB" 2>/dev/null || echo 0)
         if [ "$CURRENT_MTIME" -ne "$LAST_MTIME" ]; then
             "$SYNC_SCRIPT" >/dev/null 2>&1 || true
-            curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8083/admin/api/cookies/import-firefox >/dev/null 2>&1 || true
+            if [ -n "$ADMIN_TOKEN" ]; then
+                curl -s -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8083/admin/api/cookies/import-firefox >/dev/null 2>&1 || true
+            else
+                curl -s -X POST http://localhost:8083/admin/api/cookies/import-firefox >/dev/null 2>&1 || true
+            fi
             LAST_MTIME=$CURRENT_MTIME
         fi
     fi
