@@ -4,6 +4,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 SYNC_SCRIPT="$DIR/sync_firefox.sh"
 FF_DIR="$HOME/Library/Application Support/Firefox"
 ADMIN_TOKEN="${ADMIN_TOKEN:-$1}"
+if [ -z "$ADMIN_TOKEN" ] && [ -f "$DIR/.env" ]; then
+    ADMIN_TOKEN=$(grep -E '^ADMIN_TOKEN=' "$DIR/.env" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+fi
 LAST_MTIME=0
 
 # Locate profile
