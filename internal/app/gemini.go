@@ -69,7 +69,7 @@ type ModelConfig struct {
 // 旧的 gemini-3.5-flash / -thinking / -thinking-lite / gemini-auto /
 // gemini-flash-lite 别名已移除：它们在服务端没有对应条目，留着只会让人
 // 以为有五种不同的模型可选。
-var Models = map[string]ModelConfig{
+var defaultModels = map[string]ModelConfig{
 	"gemini-3.6-flash":      {HexID: hexFlash36, Mode: 1, Desc: "Latest all-around model"},
 	"gemini-3.5-flash-lite": {HexID: hexFlashLite, Mode: 2, Desc: "Fastest, lightweight"},
 	"gemini-3.1-pro":        {HexID: hexPro31, Mode: 2, Desc: "Most capable; needs a signed-in cookie (downgraded to Flash-Lite without one)"},
@@ -97,6 +97,16 @@ var Models = map[string]ModelConfig{
 	// 画布：生成 immersive 交互 HTML 文档，内联返回（不是二进制、不用下载）。要登录态。
 	"gemini-canvas": {HexID: hexFlash36, Mode: 1, Tool: toolCanvas, Desc: "Canvas: generates an interactive HTML document (returned inline as a ```html block); needs a signed-in cookie"},
 }
+
+func cloneDefaultModels() map[string]ModelConfig {
+	out := make(map[string]ModelConfig, len(defaultModels))
+	for k, v := range defaultModels {
+		out[k] = v
+	}
+	return out
+}
+
+var Models = cloneDefaultModels()
 
 // hasCookie 表示 cookie 池里有没有可用账号。决定 3.1 Pro 是否出现在模型列表里。
 func hasCookie() bool {

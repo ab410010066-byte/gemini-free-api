@@ -25,13 +25,13 @@ type OfficialModelItem struct {
 }
 
 // sanitizeModelName 把 Google 官方返回的名称格式化成标准的 gemini-* 格式
-func sanitizeModelName(fullName, name string) string {
-	s := fullName
+func sanitizeModelName(desc, name string) string {
+	s := strings.TrimSpace(desc)
 	if s == "" {
-		s = name
+		s = strings.TrimSpace(name)
 	}
-	s = strings.ToLower(strings.TrimSpace(s))
-	// 替换空格为中划线：例如 "4 argon" -> "gemini-4-argon", "3.8 flash" -> "gemini-3.8-flash"
+	s = strings.ToLower(s)
+	// 替换空格为中划线：例如 "4 carbon" -> "gemini-4-carbon", "3.8 flash" -> "gemini-3.8-flash"
 	s = strings.ReplaceAll(s, " ", "-")
 	if !strings.HasPrefix(s, "gemini-") {
 		s = "gemini-" + s
@@ -76,7 +76,7 @@ func FetchOfficialModelsFromGoogle() ([]OfficialModelItem, error) {
 
 	reqid := time.Now().UnixNano() % 1000000
 	endpoint := fmt.Sprintf(
-		"https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=otAQ7b&bl=%s&hl=zh-TW&_reqid=%d&rt=c",
+		"https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=otAQ7b&bl=%s&hl=en&_reqid=%d&rt=c",
 		currentBL(proxyURL), reqid,
 	)
 
@@ -184,72 +184,68 @@ func SyncOfficialModels() ([]string, error) {
 	modelsMu.Lock()
 	defer modelsMu.Unlock()
 
-	// 保存媒体工具模型
-	mediaTools := map[string]ModelConfig{
-		"gemini-image":  Models["gemini-image"],
-		"gemini-music":  Models["gemini-music"],
-		"gemini-video":  Models["gemini-video"],
-		"gemini-canvas": Models["gemini-canvas"],
-	}
-
-	newModels := make(map[string]ModelConfig)
-	var updatedNames []string
+	// 从默认内置模型基底出发，保证基础模型、媒体工具等永不丢失
+	newModels := cloneDefaultModels()
 
 	for _, item := range items {
-		baseID := sanitizeModelName(item.FullName, item.Name)
+		baseID := sanitizeModelName(item.Desc, item.Name)
 		desc := item.Desc
 		if desc == "" {
-			desc = item.FullName
+			desc = item.Name
 		}
 
-		// 基础普通模型
-		newModels[baseID] = ModelConfig{
+		baseMC := ModelConfig{
 			HexID:    item.HexID,
 			Mode:     item.Mode,
 			Desc:     desc,
 			Thinking: false,
 		}
-		updatedNames = append(updatedNames, baseID)
+		newModels[baseID] = baseMC
 
-		// 扩展思考版
-		thinkingID := baseID + "-thinking"
-		newModels[thinkingID] = ModelConfig{
+		thinkingMC := ModelConfig{
 			HexID:    item.HexID,
 			Mode:     item.Mode,
 			Desc:     desc + " with extended thinking",
 			Thinking: true,
 		}
-		updatedNames = append(updatedNames, thinkingID)
-	}
+		thinkingID := baseID + "-thinking"
+		newModels[thinkingID] = thinkingMC
 
-	// 补充通用别名映射
-	if v, ok := newModels["gemini-4-argon"]; ok {
-		newModels["gemini-argon"] = v
-		updatedNames = append(updatedNames, "gemini-argon")
-	}
-	if v, ok := newModels["gemini-4-argon-thinking"]; ok {
-		newModels["gemini-argon-thinking"] = v
-		updatedNames = append(updatedNames, "gemini-argon-thinking")
-	}
-	if v, ok := newModels["gemini-3.8-flash"]; ok {
-		newModels["gemini-3.7-flash"] = v
-		updatedNames = append(updatedNames, "gemini-3.7-flash")
-	}
-	if v, ok := newModels["gemini-3.8-flash-thinking"]; ok {
-		newModels["gemini-3.7-flash-thinking"] = v
-		updatedNames = append(updatedNames, "gemini-3.7-flash-thinking")
-	}
-
-	// 恢复媒体工具
-	for k, v := range mediaTools {
-		if v.HexID != "" {
-			newModels[k] = v
-			updatedNames = append(updatedNames, k)
+		// 针对已知官方 HexID 显式绑定标准别名，避免 Google UI 文案变动导致别名失效
+		switch item.HexID {
+		case hexFlash38:
+			newModels["gemini-3.8-flash"] = baseMC
+			newModels["gemini-3.8-flash-thinking"] = thinkingMC
+			newModels["gemini-3.7-flash"] = baseMC
+			newModels["gemini-3.7-flash-thinking"] = thinkingMC
+		case hexPro31:
+			newModels["gemini-3.1-pro"] = baseMC
+			newModels["gemini-3.1-pro-thinking"] = thinkingMC
+		case hexFlashLite:
+			newModels["gemini-3.5-flash-lite"] = baseMC
+			newModels["gemini-3.5-flash-lite-thinking"] = thinkingMC
+		case hexArgon:
+			newModels["gemini-4-argon"] = baseMC
+			newModels["gemini-argon"] = baseMC
+			newModels["gemini-4-argon-thinking"] = thinkingMC
+			newModels["gemini-argon-thinking"] = thinkingMC
 		}
 	}
 
+	// 补充通用别名映射
+	if v, ok := newModels["gemini-4-carbon"]; ok {
+		newModels["gemini-carbon"] = v
+	}
+	if v, ok := newModels["gemini-4-carbon-thinking"]; ok {
+		newModels["gemini-carbon-thinking"] = v
+	}
+
 	Models = newModels
-	logf("[models] 官方模型清单已实时同步更新 (共 %d 个官方模型): %v", len(updatedNames), updatedNames)
+	var updatedNames []string
+	for k := range Models {
+		updatedNames = append(updatedNames, k)
+	}
+	logf("[models] 官方模型清单已实时同步更新 (共 %d 个模型): %v", len(updatedNames), updatedNames)
 	return updatedNames, nil
 }
 
