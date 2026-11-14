@@ -170,6 +170,20 @@ func resolveModel(modelName string) (string, ModelConfig, error) {
 	modelName = strings.TrimSpace(modelName)
 	mc, ok := availableModels()[modelName]
 	if !ok {
+		// 针对第三方多模态客户端（如 NextChat / Cherry Studio）的视觉别名映射
+		aliasMap := map[string]string{
+			"gpt-4o":                  "gemini-3.8-flash",
+			"gemini-1.5-flash":        "gemini-3.6-flash",
+			"gemini-1.5-pro":          "gemini-3.1-pro",
+			"gemini-3.8-flash-vision": "gemini-3.8-flash",
+			"gemini-3.6-flash-vision": "gemini-3.6-flash",
+		}
+		if target, isAlias := aliasMap[modelName]; isAlias {
+			if targetMC, targetOK := availableModels()[target]; targetOK {
+				return modelName, targetMC, nil
+			}
+		}
+
 		modelsMu.RLock()
 		full, exists := Models[modelName]
 		modelsMu.RUnlock()

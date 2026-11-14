@@ -1171,7 +1171,8 @@ const ICONS = {
   sparkle: '<path d="M12 2L9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5z"/>',
   table: '<path d="M20 3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 2v3H4V5h16zm-7 5v9h-2v-9h2zm-4 0v9H4v-9h5zm6 9v-9h5v9h-5z"/>',
   cards: '<path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zm-9 9h7v7H4v-7zm9 0h7v7h-7v-7z"/>',
-  download: '<path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>'
+  download: '<path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>',
+  image: '<path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>'
 };
 
 const NAV_ITEMS = [
@@ -1934,9 +1935,9 @@ const PAGE_RENDERERS = {
             <div class="play-attached-chips" id="playAttachedChips"></div>
             <div style="display:flex;gap:10px;align-items:flex-end">
               <textarea class="textarea" id="playInputText" rows="2" style="flex:1" placeholder="輸入訊息... (Enter 發送，Shift+Enter 換行)" onkeydown="handlePlayInputKey(event)"></textarea>
-              <input type="file" id="playFileInput" multiple style="display:none" onchange="handlePlayFileInput(this)">
-              <button class="btn btn-icon" onclick="document.getElementById('playFileInput').click()" title="附加多模態檔案/圖片">
-                <svg viewBox="0 0 24 24">${ICONS.sparkle}</svg>
+              <input type="file" id="playFileInput" accept="image/*,.pdf,.txt" multiple style="display:none" onchange="handlePlayFileInput(this)">
+              <button class="btn btn-icon" onclick="document.getElementById('playFileInput').click()" title="上傳圖片或檔案 (支援直接貼上截圖 Ctrl+V / Cmd+V)">
+                <svg viewBox="0 0 24 24">${ICONS.image}</svg>
               </button>
               <button class="btn btn-primary" id="playSendBtn" onclick="sendPlayMessage()">
                 <span>發送</span>
@@ -3537,6 +3538,15 @@ function updatePlayModelBadge() {
   }
 }
 
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function handlePlayInputKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -3547,12 +3557,17 @@ function handlePlayInputKey(e) {
 function initPlaygroundClipboard() {
   const textEl = document.getElementById('playInputText');
   if (!textEl) return;
-  textEl.addEventListener('paste', (e) => {
-    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+  textEl.addEventListener('paste', async (e) => {
+    const items = (e.clipboardData || e.originalEvent.clipboardData)?.items || [];
     for (const item of items) {
       if (item.type.indexOf('image') === 0) {
         const file = item.getAsFile();
-        playAttachedFiles.push({ name: `pasted_image_${Date.now()}.png`, size: file.size, file, type: 'image' });
+        if (!file) continue;
+        let thumb = '';
+        try {
+          thumb = await readFileAsDataURL(file);
+        } catch (_) {}
+        playAttachedFiles.push({ name: `pasted_image_${Date.now()}.png`, size: file.size, file, type: 'image', thumb });
         renderAttachedChips();
         toast('已自動附加剪貼簿截圖！', 'info');
       }
@@ -3560,11 +3575,17 @@ function initPlaygroundClipboard() {
   });
 }
 
-function handlePlayFileInput(input) {
+async function handlePlayFileInput(input) {
   const files = Array.from(input.files || []);
   if (!files.length) return;
   for (const f of files) {
-    playAttachedFiles.push({ name: f.name, size: f.size, file: f, type: f.type.includes('image') ? 'image' : 'file' });
+    let thumb = '';
+    if (f.type.includes('image')) {
+      try {
+        thumb = await readFileAsDataURL(f);
+      } catch (_) {}
+    }
+    playAttachedFiles.push({ name: f.name, size: f.size, file: f, type: f.type.includes('image') ? 'image' : 'file', thumb });
   }
   renderAttachedChips();
   input.value = '';
@@ -3574,9 +3595,10 @@ function renderAttachedChips() {
   const container = document.getElementById('playAttachedChips');
   if (!container) return;
   container.innerHTML = playAttachedFiles.map((f, idx) => `
-    <div class="play-file-chip">
-      <span>📄 ${escapeHtml(f.name)} (${fmt.bytes(f.size)})</span>
-      <span class="remove" onclick="removeAttachedFile(${idx})">✕</span>
+    <div class="play-file-chip" style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;font-size:12px;margin:4px 4px 4px 0;">
+      ${f.thumb ? `<img src="${f.thumb}" style="width:22px;height:22px;object-fit:cover;border-radius:3px;">` : '<span>📄</span>'}
+      <span>${escapeHtml(f.name)} (${fmt.bytes(f.size)})</span>
+      <span class="remove" style="cursor:pointer;opacity:0.6;margin-left:4px;" onclick="removeAttachedFile(${idx})">✕</span>
     </div>
   `).join('');
 }
@@ -3615,10 +3637,20 @@ async function sendPlayMessage() {
   const sysPrompt = document.getElementById('playSystemPrompt')?.value || '';
   const temp = parseFloat(document.getElementById('playTempVal')?.textContent || '0.2');
 
-  // Render User Message
+  const filesToSend = [...playAttachedFiles];
+  playAttachedFiles = [];
+  renderAttachedChips();
+
+  // Render User Message with Thumbnails
   let userDisplay = escapeHtml(rawText);
-  if (playAttachedFiles.length > 0) {
-    userDisplay = `<div style="font-size:11.5px;color:var(--accent-cyan);margin-bottom:6px">📎 附加 ${playAttachedFiles.length} 個附件: ${playAttachedFiles.map(f => escapeHtml(f.name)).join(', ')}</div>` + userDisplay;
+  if (filesToSend.length > 0) {
+    const thumbsHTML = filesToSend.map(f => {
+      if (f.thumb) {
+        return `<img src="${f.thumb}" style="max-width:200px;max-height:160px;object-fit:contain;border-radius:6px;border:1px solid rgba(255,255,255,0.15);display:block;margin-top:6px;cursor:pointer;" onclick="window.open(this.src)" title="點擊放大檢視">`;
+      }
+      return `<div style="font-size:11.5px;color:var(--accent-cyan);margin-top:4px">📎 附件: ${escapeHtml(f.name)} (${fmt.bytes(f.size)})</div>`;
+    }).join('');
+    userDisplay = userDisplay ? `${userDisplay}<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">${thumbsHTML}</div>` : `<div style="display:flex;gap:8px;flex-wrap:wrap;">${thumbsHTML}</div>`;
   }
   const userMsgNode = document.createElement('div');
   userMsgNode.className = 'play-msg user';
@@ -3629,8 +3661,6 @@ async function sendPlayMessage() {
   feed.appendChild(userMsgNode);
 
   inputEl.value = '';
-  playAttachedFiles = [];
-  renderAttachedChips();
   feed.scrollTop = feed.scrollHeight;
 
   // Placeholder for Assistant Message
@@ -3660,10 +3690,45 @@ async function sendPlayMessage() {
   const bubbleEl = document.getElementById(msgId);
 
   // Build Payload
+  let userContent = rawText;
+  if (filesToSend.length > 0) {
+    const contentParts = [];
+    if (rawText) {
+      contentParts.push({ type: 'text', text: rawText });
+    }
+    for (const item of filesToSend) {
+      let dataUrl = item.thumb;
+      if (!dataUrl && item.file) {
+        try {
+          dataUrl = await readFileAsDataURL(item.file);
+        } catch (e) {
+          console.error("Failed to read file", e);
+        }
+      }
+      if (dataUrl) {
+        if (item.type === 'image' || (item.file && item.file.type && item.file.type.startsWith('image/'))) {
+          contentParts.push({
+            type: 'image_url',
+            image_url: { url: dataUrl }
+          });
+        } else {
+          contentParts.push({
+            type: 'file',
+            file: {
+              filename: item.name,
+              file_data: dataUrl
+            }
+          });
+        }
+      }
+    }
+    userContent = contentParts;
+  }
+
   const msgs = [];
   if (sysPrompt) msgs.push({ role: 'system', content: sysPrompt });
   msgs.push(...playMessages);
-  msgs.push({ role: 'user', content: rawText });
+  msgs.push({ role: 'user', content: userContent });
 
   try {
     const res = await fetch('../v1/chat/completions', {
@@ -3771,7 +3836,7 @@ async function sendPlayMessage() {
     `;
     bubbleEl.innerHTML = finalHTML;
 
-    playMessages.push({ role: 'user', content: rawText });
+    playMessages.push({ role: 'user', content: userContent });
     playMessages.push({ role: 'assistant', content: responseText });
     statusLbl.textContent = '完成';
 
