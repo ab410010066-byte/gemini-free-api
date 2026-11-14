@@ -170,15 +170,32 @@ func resolveModel(modelName string) (string, ModelConfig, error) {
 	modelName = strings.TrimSpace(modelName)
 	mc, ok := availableModels()[modelName]
 	if !ok {
-		// 针对第三方多模态客户端（如 NextChat / Cherry Studio）的视觉别名映射
+		// 规范化：小写并把空格转为连字符 (如 "gemini 4 hydrogen" -> "gemini-4-hydrogen")
+		normalized := strings.ReplaceAll(strings.ToLower(modelName), " ", "-")
+		if targetMC, targetOK := availableModels()[normalized]; targetOK {
+			return normalized, targetMC, nil
+		}
+
+		// 自动剥除第三方客户端常用的 "-vision" 视觉后缀 (如 "gemini-4-hydrogen-vision" -> "gemini-4-hydrogen")
+		if strings.HasSuffix(normalized, "-vision") {
+			baseName := strings.TrimSuffix(normalized, "-vision")
+			if targetMC, targetOK := availableModels()[baseName]; targetOK {
+				return modelName, targetMC, nil
+			}
+		}
+
+		// 针对第三方多模态客户端（如 NextChat / Cherry Studio）的视觉与兼容别名映射
 		aliasMap := map[string]string{
 			"gpt-4o":                  "gemini-3.8-flash",
 			"gemini-1.5-flash":        "gemini-3.6-flash",
 			"gemini-1.5-pro":          "gemini-3.1-pro",
-			"gemini-3.8-flash-vision": "gemini-3.8-flash",
-			"gemini-3.6-flash-vision": "gemini-3.6-flash",
+			"gemini-hydrogen":         "gemini-4-hydrogen",
+			"gemini-hydrogen-vision":  "gemini-4-hydrogen",
+			"gemini-hydrogen-thinking": "gemini-4-hydrogen-thinking",
+			"gemini-carbon":           "gemini-4-carbon",
+			"gemini-argon":            "gemini-4-argon",
 		}
-		if target, isAlias := aliasMap[modelName]; isAlias {
+		if target, isAlias := aliasMap[normalized]; isAlias {
 			if targetMC, targetOK := availableModels()[target]; targetOK {
 				return modelName, targetMC, nil
 			}
