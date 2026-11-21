@@ -2068,7 +2068,7 @@ const PAGE_RENDERERS = {
             <button class="btn btn-sm" onclick="refreshAllCookieQuotas()">
               <span>更新全額度雷達</span>
             </button>
-            <button class="btn btn-sm" onclick="clearAllConversations()">
+            <button class="btn btn-sm" id="btnClearConv" onclick="clearAllConversations(this)">
               <span>清理遠端對話歷史</span>
             </button>
             <button class="btn btn-sm" onclick="showAddCookieModal()">
@@ -2083,6 +2083,12 @@ const PAGE_RENDERERS = {
         ${renderFleetContent(accounts, viewMode)}
       </div>
     `;
+
+    api('api/conversations/clear').then(res => {
+      if (res && res.progress && res.progress.running) {
+        pollConversationClearProgress(document.getElementById('btnClearConv'));
+      }
+    }).catch(() => {});
   },
 
   /* 5. EGRESS MESH / PROXY POOL */
@@ -2936,6 +2942,7 @@ function renderFleetContent(accounts, mode) {
                       <div style="display:flex;gap:4px">
                         <button class="btn btn-sm" onclick="checkCookieAcct(${a.id}, this)">檢測</button>
                         <button class="btn btn-sm" onclick="refreshCookieQuota(${a.id}, this)">查額度</button>
+                        <button class="btn btn-sm" onclick="clearSingleCookieConv(${a.id}, this)">清對話</button>
                         <button class="btn btn-sm" onclick="editCookieModal(${a.id})">編輯</button>
                         <button class="btn btn-sm" onclick="toggleCookieAcct(${a.id})">${isDisabled ? '啟用' : '停用'}</button>
                         <button class="btn btn-sm btn-danger" onclick="delCookieAcct(${a.id})">刪除</button>
@@ -3026,6 +3033,7 @@ function renderFleetContent(accounts, mode) {
               <div style="display:flex;gap:5px;flex-wrap:wrap">
                 <button class="btn btn-sm" style="flex:1" onclick="checkCookieAcct(${a.id}, this)">檢測</button>
                 <button class="btn btn-sm" style="flex:1" onclick="refreshCookieQuota(${a.id}, this)">查額度</button>
+                <button class="btn btn-sm" style="flex:1" onclick="clearSingleCookieConv(${a.id}, this)">清對話</button>
                 <button class="btn btn-sm" onclick="editCookieModal(${a.id})">編輯</button>
                 <button class="btn btn-sm" onclick="toggleCookieAcct(${a.id})">${isDisabled ? '啟用' : '停用'}</button>
                 <button class="btn btn-sm btn-danger" onclick="delCookieAcct(${a.id})">刪除</button>
@@ -4062,14 +4070,84 @@ async function refreshAllCookieQuotas() {
   }
 }
 
-async function clearAllConversations() {
-  if (!confirm('確定要清理 Google 遠端殘存對話嗎？這會把各帳號留在 gemini.google.com 上的臨時對話清空，保護隱私。')) return;
-  toast('正在清理遠端對話...', 'info');
+let isClearingConversations = false;
+let clearPollTimer = null;
+
+async function clearAllConversations(btn) {
+  if (isClearingConversations) {
+    toast('遠端歷史對話清理正在背景執行中，請稍候...', 'info');
+    return;
+  }
+  if (!confirm('確定要清理 Google 遠端殘存對話嗎？這會把各帳號留在 gemini.google.com 上的歷史對話清空，保護隱私。\n\n任務將在後台並發執行，不影響正常對話調用。')) return;
+
+  const targetBtn = btn || document.getElementById('btnClearConv');
   try {
-    await api('api/conversations/clear', { method: 'POST' });
-    toast('已清理遠端對話', 'success');
+    const res = await api('api/conversations/clear', { method: 'POST' });
+    if (!res.ok) {
+      toast('啟動清理失敗: ' + (res.error || '未知錯誤'), 'error');
+      return;
+    }
+    toast(res.message || '已啟動後台清理任務...', 'info');
+    pollConversationClearProgress(targetBtn);
   } catch (e) {
-    toast('清理失敗: ' + e.message, 'error');
+    toast('清理請求失敗: ' + e.message, 'error');
+  }
+}
+
+function pollConversationClearProgress(btn) {
+  isClearingConversations = true;
+  const targetBtn = btn || document.getElementById('btnClearConv');
+  if (targetBtn) {
+    targetBtn.disabled = true;
+    if (!targetBtn.dataset.origText) {
+      targetBtn.dataset.origText = targetBtn.innerHTML;
+    }
+  }
+
+  if (clearPollTimer) clearInterval(clearPollTimer);
+
+  clearPollTimer = setInterval(async () => {
+    try {
+      const res = await api('api/conversations/clear');
+      const p = res && res.progress;
+      if (!p) return;
+
+      const currentBtn = document.getElementById('btnClearConv') || targetBtn;
+      if (currentBtn) {
+        currentBtn.innerHTML = `<span>清理中 (${p.accounts_done}/${p.accounts_total} · 刪除 ${p.total_deleted} 條)...</span>`;
+      }
+
+      if (!p.running) {
+        clearInterval(clearPollTimer);
+        clearPollTimer = null;
+        isClearingConversations = false;
+        if (currentBtn && currentBtn.dataset.origText) {
+          currentBtn.innerHTML = currentBtn.dataset.origText;
+          currentBtn.disabled = false;
+        }
+        toast(`遠端歷史對話清理完成！共處理 ${p.accounts_done} 個帳號，刪除 ${p.total_deleted} 條會話。`, 'success');
+      }
+    } catch (e) {
+      // 容忍臨時網路抖動
+    }
+  }, 1500);
+}
+
+async function clearSingleCookieConv(id, btn) {
+  if (!confirm(`確定要清理帳號 #${id} 在 gemini.google.com 上的遠端歷史對話嗎？`)) return;
+  if (btn) btn.disabled = true;
+  toast(`正在清理帳號 #${id} 的遠端歷史對話...`, 'info');
+  try {
+    const res = await api(`api/cookies/${id}/clear-conv`, { method: 'POST' });
+    if (res.ok) {
+      toast(res.message || `帳號 #${id} 歷史對話已清空！`, 'success');
+    } else {
+      toast(`帳號 #${id} 清理失敗: ` + (res.error || '未知錯誤'), 'error');
+    }
+  } catch (e) {
+    toast(`清理失敗: ${e.message}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

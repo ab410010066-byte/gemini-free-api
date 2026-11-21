@@ -626,7 +626,10 @@ func checkAccountCookie(a CookieAccount) CookieCheck {
 	_, err = getXSRF(a.Cookie, proxyURL)
 	took := time.Since(t0).Milliseconds()
 	if err != nil {
-		markAccountResult(a.ID, false, err.Error())
+		// 若为 Google WAF 临时风控拦截（sorry/index 或 429），为出口 IP 问题，不应判定账号失效
+		if !strings.Contains(err.Error(), "sorry") && !strings.Contains(err.Error(), "HTTP 429") {
+			markAccountResult(a.ID, false, err.Error())
+		}
 		return CookieCheck{Detail: explainCookieFailure(err), ProxyName: name, TookMs: took}
 	}
 	markAccountResult(a.ID, true, "")
@@ -642,12 +645,14 @@ func checkAccountCookie(a CookieAccount) CookieCheck {
 func explainCookieFailure(err error) string {
 	msg := err.Error()
 	switch {
+	case strings.Contains(msg, "sorry"):
+		return "出口 IP 触发 Google 验证码/风控 (sorry/index)，请等待风控冷却或更换代理出口（非 Cookie 问题）"
+	case strings.Contains(msg, "HTTP 429"):
+		return "出口 IP 被 Google 限流 (HTTP 429)，请更换代理出口或稍后再试（非 Cookie 问题）"
 	case strings.Contains(msg, "no SNlM0e"):
 		return "cookie 已失效：页面能打开但没有登录态，请求会被当匿名处理"
 	case strings.Contains(msg, "HTTP 302"):
 		return "cookie 无效：被重定向到登录页"
-	case strings.Contains(msg, "HTTP 429"), strings.Contains(msg, "sorry"):
-		return "出口被上游限流，换个代理再试（不是 cookie 的问题）"
 	default:
 		return "检测失败：" + msg
 	}

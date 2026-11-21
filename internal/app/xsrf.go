@@ -135,6 +135,10 @@ func fetchAppPage(cookie, proxyURL string) ([]byte, error) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
+			loc := resp.Header.Get("Location")
+			if loc != "" {
+				return nil, fmt.Errorf("fetch /app: HTTP %d (redirect to %s)", resp.StatusCode, loc)
+			}
 			return nil, fmt.Errorf("fetch /app: HTTP %d", resp.StatusCode)
 		}
 		body, err = io.ReadAll(resp.Body)
@@ -155,6 +159,10 @@ func fetchAppPage(cookie, proxyURL string) ([]byte, error) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
+			loc := resp.Header.Get("Location")
+			if loc != "" {
+				return nil, fmt.Errorf("fetch /app: HTTP %d (redirect to %s)", resp.StatusCode, loc)
+			}
 			return nil, fmt.Errorf("fetch /app: HTTP %d", resp.StatusCode)
 		}
 		body, err = io.ReadAll(resp.Body)

@@ -196,6 +196,25 @@ func handleAdminCookieItem(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "account not found"})
 			return
 		}
+		if action == "clear-conv" || action == "clear-conversations" {
+			for _, a := range accountList() {
+				if a.ID == id {
+					n, err := ClearAccountConversations(a)
+					if err != nil {
+						writeJSON(w, 200, map[string]interface{}{"ok": false, "error": err.Error()})
+						return
+					}
+					writeJSON(w, 200, map[string]interface{}{
+						"ok":      true,
+						"deleted": n,
+						"message": fmt.Sprintf("账号 #%d (%s) 清理完成，共删除 %d 条会话", a.ID, a.Label, n),
+					})
+					return
+				}
+			}
+			writeJSON(w, 404, map[string]string{"error": "account not found"})
+			return
+		}
 		if action != "toggle" {
 			writeJSON(w, 400, map[string]string{"error": "unknown action"})
 			return
@@ -307,26 +326,54 @@ func handleAdminCookiesSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAdminClearConversations — POST /admin/api/conversations/clear
+// handleAdminClearConversations — GET / POST /admin/api/conversations/clear
 func handleAdminClearConversations(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, 200, map[string]interface{}{
+			"ok":       true,
+			"progress": GetConvCleanProgress(),
+		})
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		writeJSON(w, 405, map[string]string{"error": "method not allowed"})
 		return
 	}
-	res, err := ClearAllAccountsConversations()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+
+	// 支持通过 ?sync=1 或 ?wait=1 同步阻塞等待模式
+	if r.URL.Query().Get("sync") == "1" || r.URL.Query().Get("wait") == "1" {
+		res, err := ClearAllAccountsConversations()
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		total := 0
+		for _, n := range res {
+			total += n
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"ok":      true,
+			"total":   total,
+			"details": res,
+			"message": fmt.Sprintf("已成功清空全部账号的历史会话（共删除 %d 条）", total),
+		})
 		return
 	}
-	total := 0
-	for _, n := range res {
-		total += n
+
+	// 默认异步后台执行模式
+	started, prog := StartBackgroundConvCleaning()
+	msg := "后台清理任务已启动，正在并发清理各账号会话..."
+	if !started {
+		msg = "会话清理任务已在后台执行中，请勿重复启动"
 	}
+
 	writeJSON(w, 200, map[string]interface{}{
-		"ok":      true,
-		"total":   total,
-		"details": res,
-		"message": fmt.Sprintf("已成功清空全部账号的历史会话（共删除 %d 条）", total),
+		"ok":       true,
+		"started":  started,
+		"running":  prog.Running,
+		"message":  msg,
+		"progress": prog,
 	})
 }
 
